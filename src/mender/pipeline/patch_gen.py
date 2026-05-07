@@ -38,15 +38,23 @@ class Patch:
 
 _PATCH_PROMPT = """\
 You are editing the system instruction for FinPay Support to fix one
-specific failure mode. Apply the smallest possible change that resolves
-the hypothesis WITHOUT introducing other behavioral changes.
+specific failure mode. Apply the smallest possible change that
+DEMONSTRABLY RESOLVES the hypothesis without introducing other
+behavioral changes.
 
 Rules:
   - Edit ONLY what's needed to fix the hypothesized failure. Don't
     rephrase unrelated lines, don't tighten unrelated rules.
-  - Prefer surgical edits: remove a bad clause, replace it with the
-    correct rule, or insert a missing clause. Don't rewrite the whole
-    prompt.
+  - When removing an imperative rule (anything that tells the model
+    to DO X), you MUST replace it with the correct positive rule
+    that tells the model what to do instead. Never delete-only —
+    the absence of a rule leaves model behavior under-specified
+    and unreliable. Example: if removing "Always assume USD if not
+    specified.", the patched prompt must add a clear rule like
+    "If the user does not specify a currency, ask them to specify
+    one before performing the conversion. Never assume a default
+    currency." The replacement should be at least as imperative as
+    the rule it removes.
   - Preserve the existing voice, capabilities list, and structure.
   - The output must be a complete, runnable system instruction — not
     a diff and not a description of changes.
