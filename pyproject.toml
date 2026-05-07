@@ -1,0 +1,64 @@
+[project]
+name = "mender"
+version = "0.1.0"
+description = "An autonomous agent that reads its own traces and improves the agents it watches."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Matt Spaulding" }]
+
+dependencies = [
+    # Agent runtime
+    "google-adk",
+    "google-cloud-aiplatform",
+    # Phoenix instrumentation
+    "openinference-instrumentation-google-adk",
+    "openinference-instrumentation-vertexai",
+    "arize-phoenix-otel",
+    # Web layer (UI + Slack callbacks)
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    # State
+    "google-cloud-firestore",
+    "google-cloud-storage",
+    "google-cloud-secret-manager",
+    # Slack
+    "slack-sdk",
+    # Misc
+    "python-dotenv",
+    "httpx",
+    "structlog",
+    "pyyaml",
+    "rich",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+mender = "mender.cli:main"
+finpay-serve = "finpay.server:main"
+finpay-traffic = "finpay.traffic:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mender", "src/finpay"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

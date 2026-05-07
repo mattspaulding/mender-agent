@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.python-version
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# uv
+uv.lock
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+service-account*.json
+*-credentials.json
+
+# Build artifacts
+build/
+dist/
+*.whl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Phoenix / OTEL local data
+phoenix-data/
+otel-collector-data/
+
+# Local state (Firestore emulator, etc.)
+.firebase/
+firestore-debug.log
+firebase-debug.log
+
+# Docker
+.dockerignore.local
+
+# Deploy artifacts
+.gcloudignore.local
