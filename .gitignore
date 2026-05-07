@@ -15,8 +15,7 @@ htmlcov/
 venv/
 env/
 
-# uv
-uv.lock
+# uv: lockfile is tracked for reproducible builds (Cloud Build needs it)
 
 # Secrets
 .env
