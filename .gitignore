@@ -55,3 +55,6 @@ firebase-debug.log
 
 # Deploy artifacts
 .gcloudignore.local
+.mender/
+_full_loop.py
+prompts/finpay/staging/

@@ -206,6 +206,50 @@ def _cmd_doctor(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_investigate(args: argparse.Namespace) -> int:
+    """Run the full incident pipeline (C3-C9) end-to-end."""
+    from .pipeline.incident import run_incident_pipeline
+    from .pipeline.scorer import _parse_window  # type: ignore[attr-defined]
+
+    window = _parse_window(args.window)
+    outcome = run_incident_pipeline(
+        target_project=args.project,
+        window_minutes=window,
+        eval_target_count=args.eval_count,
+        finpay_url=args.finpay_url,
+    )
+    if outcome.incident is None:
+        console.print(f"[dim](no incident — {outcome.skipped_reason})[/]")
+        return 0
+
+    inc = outcome.incident
+    base = inc.baseline_eval or {}
+    staged = inc.staged_eval or {}
+    base_pass = base.get("pass_count", 0)
+    base_total = len(base.get("results", []))
+    staged_pass = staged.get("pass_count", 0)
+    staged_total = len(staged.get("results", []))
+
+    state_color = {
+        "patch_proposed": "green",
+        "patch_applied": "green",
+        "resolved": "green",
+        "dismissed": "yellow",
+    }.get(inc.state, "cyan")
+    console.print()
+    console.print(f"[bold]incident {inc.id}[/]  state=[bold {state_color}]{inc.state}[/]")
+    console.print(f"  pattern  : {inc.cluster_pattern}")
+    console.print(f"  affected : {len(inc.affected_trace_ids)} traces")
+    if base_total:
+        console.print(f"  baseline : {base_pass}/{base_total} pass ({100*base_pass/base_total:.0f}%)")
+    if staged_total:
+        console.print(f"  staged   : {staged_pass}/{staged_total} pass ({100*staged_pass/staged_total:.0f}%)")
+    console.print(f"  elapsed  : {outcome.elapsed_seconds:.0f}s")
+    if outcome.skipped_reason:
+        console.print(f"  [dim]note: {outcome.skipped_reason}[/]")
+    return 0
+
+
 def _cmd_score_finpay(args: argparse.Namespace) -> int:
     from .pipeline.scorer import score_window, _parse_window
 
@@ -250,6 +294,20 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--model", default=None, help="override judge model (defaults to MENDER_JUDGE_MODEL)")
     sc.add_argument("--rescore", action="store_true", help="re-score spans even if annotated")
     sc.set_defaults(func=_cmd_score_finpay)
+
+    iv = sub.add_parser(
+        "investigate",
+        help="run the full pipeline: detect → hypothesize → eval → patch → stage → verify",
+    )
+    iv.add_argument("--window", default=os.environ.get("MENDER_WINDOW", "60m"))
+    iv.add_argument("--project", default=os.environ.get("PHOENIX_TARGET_PROJECT", "finpay-support"))
+    iv.add_argument("--eval-count", type=int, default=8, help="number of eval cases to generate")
+    iv.add_argument(
+        "--finpay-url",
+        default=os.environ.get("FINPAY_URL", "http://127.0.0.1:8081"),
+        help="FinPay HTTP endpoint for the baseline eval run",
+    )
+    iv.set_defaults(func=_cmd_investigate)
 
     args = p.parse_args(argv)
     try:
