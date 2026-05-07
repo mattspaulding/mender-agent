@@ -206,6 +206,25 @@ def _cmd_doctor(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_score_finpay(args: argparse.Namespace) -> int:
+    from .pipeline.scorer import score_window, _parse_window
+
+    window = _parse_window(args.window)
+    stats = score_window(
+        project=args.project,
+        window_minutes=window,
+        judge_model=args.model,
+        rescore=args.rescore,
+    )
+    console.print(
+        f"\n[bold]done[/] — scanned {stats.scanned}, scored {stats.scored}, "
+        f"already-scored {stats.skipped_already_scored}, "
+        f"non-currency {stats.skipped_non_currency}, "
+        f"errors {stats.failures} ({stats.elapsed_seconds:.1f}s)"
+    )
+    return 0 if stats.failures == 0 else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="mender", description="Mender — catches the cracks. Mends them.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -221,6 +240,16 @@ def main(argv: list[str] | None = None) -> int:
 
     doc = sub.add_parser("doctor", help="check local environment")
     doc.set_defaults(func=_cmd_doctor)
+
+    sc = sub.add_parser(
+        "score-finpay",
+        help="score FinPay traces with LLM-as-judge, write annotations to Phoenix",
+    )
+    sc.add_argument("--window", default=os.environ.get("MENDER_WINDOW", "60m"))
+    sc.add_argument("--project", default=os.environ.get("PHOENIX_TARGET_PROJECT", "finpay-support"))
+    sc.add_argument("--model", default=None, help="override judge model (defaults to MENDER_JUDGE_MODEL)")
+    sc.add_argument("--rescore", action="store_true", help="re-score spans even if annotated")
+    sc.set_defaults(func=_cmd_score_finpay)
 
     args = p.parse_args(argv)
     try:
