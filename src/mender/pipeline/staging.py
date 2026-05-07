@@ -34,6 +34,7 @@ from .patch_gen import Patch
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PROMPTS_DIR = _REPO_ROOT / "prompts" / "finpay"
 _STAGING_DIR = _PROMPTS_DIR / "staging"
+_LIVE_POINTER = _PROMPTS_DIR / ".live"  # records which version is live
 
 
 def apply_patch_to_staging(patch: Patch) -> Path:
@@ -57,6 +58,49 @@ def apply_patch_to_staging(patch: Patch) -> Path:
     }
     path.write_text(yaml.safe_dump(document, sort_keys=False))
     return path
+
+
+def promote_to_live(patch: Patch, *, finpay_url: str | None = None) -> Path:
+    """D3: atomic prompt swap.
+
+    Moves the staging YAML to prompts/finpay/<new_version>.yaml and
+    records the new live version in .live. The staged file is removed
+    so it can't be promoted twice. The old live file is left in place,
+    so this is rollback-able by writing the previous version into .live.
+
+    A live FinPay HTTP server still has the OLD prompt loaded in memory
+    until it restarts (or its `live_version` cache invalidates). For
+    Cloud Run, the simplest path is to redeploy with the bumped
+    FINPAY_PROMPT_VERSION env var; for local demos, restart finpay-serve
+    with FINPAY_PROMPT_VERSION pointing at the new version.
+
+    Args:
+        patch: the Patch returned from generate_patch().
+        finpay_url: reserved — future revisions will hit a /admin/reload
+            endpoint to make the swap zero-downtime.
+
+    Returns:
+        Path to the new live YAML file.
+    """
+    staging_path = _STAGING_DIR / f"{patch.new_version}.yaml"
+    if not staging_path.exists():
+        raise FileNotFoundError(
+            f"staged prompt {patch.new_version} not found at {staging_path}; "
+            "did apply_patch_to_staging run for this patch?"
+        )
+    live_path = _PROMPTS_DIR / f"{patch.new_version}.yaml"
+    # Atomic rename within the same filesystem — POSIX guarantees no
+    # partial state.
+    staging_path.replace(live_path)
+    _LIVE_POINTER.write_text(patch.new_version)
+    return live_path
+
+
+def current_live_version() -> str | None:
+    """Return the version recorded in `.live`, or None if unset."""
+    if not _LIVE_POINTER.exists():
+        return None
+    return _LIVE_POINTER.read_text().strip() or None
 
 
 def simulated_finpay_endpoint(

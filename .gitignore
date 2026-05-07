@@ -58,3 +58,4 @@ firebase-debug.log
 .mender/
 _full_loop.py
 prompts/finpay/staging/
+prompts/finpay/.live

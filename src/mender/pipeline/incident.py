@@ -218,8 +218,23 @@ def run_incident_pipeline(
     incident.cycle_params = params.to_dict()
     store.upsert(incident)
 
-    # 4. hypothesize
-    live = live_version()
+    # 4. hypothesize. Resolve "live" by asking FinPay's /healthz so the
+    #    pipeline doesn't desynchronize when the local env disagrees
+    #    with what the target server is actually serving.
+    import httpx as _httpx
+
+    try:
+        r = _httpx.get(f"{finpay_url.rstrip('/')}/healthz", timeout=5.0)
+        r.raise_for_status()
+        live_version_tag = r.json().get("prompt_version")
+    except _httpx.HTTPError:
+        live_version_tag = None
+    if live_version_tag:
+        from finpay.prompts import load_version as _load_version
+
+        live = _load_version(live_version_tag)
+    else:
+        live = live_version()
     versions = [
         PromptVersionRef(version=v.version, released_at=v.released_at, instruction=v.instruction, notes=v.notes)
         for v in list_versions()
@@ -280,6 +295,23 @@ def run_incident_pipeline(
     self_eval = score_cycle(incident)
     incident.self_eval = self_eval.to_dict()
     store.upsert(incident)
+
+    # 9. Slack notification (D1). Fires only on patch_proposed; the
+    #    poster no-ops with a printout when SLACK_INCOMING_WEBHOOK
+    #    isn't set, so this is safe in dry-run / local dev.
+    if incident.state == "patch_proposed":
+        try:
+            from ..integrations.slack import post_incident as _post_incident
+
+            _post_incident(incident)
+        except Exception as e:
+            # Notification failure shouldn't fail the pipeline; the
+            # incident is still in the store and surfaced in the web UI.
+            incident.history.append(
+                {"at": _now_iso(), "from": incident.state, "to": incident.state,
+                 "note": f"slack notify failed: {e.__class__.__name__}: {e}"}
+            )
+            store.upsert(incident)
 
     return PipelineOutcome(incident, None, _elapsed(t0))
 

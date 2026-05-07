@@ -250,6 +250,33 @@ def _cmd_investigate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_notify(args: argparse.Namespace) -> int:
+    """Send (or dry-run) the Slack incident card for a stored incident."""
+    from .integrations.slack import post_incident
+    from .pipeline.incident import IncidentStore
+
+    store = IncidentStore()
+    incident = next((i for i in store.list_all() if i.id == args.incident_id), None)
+    if incident is None:
+        console.print(f"[red]incident not found: {args.incident_id}[/]")
+        return 1
+    if incident.state != "patch_proposed":
+        console.print(
+            f"[yellow]warning: incident state is {incident.state!r}, "
+            f"not patch_proposed[/]"
+        )
+        if not args.force:
+            console.print("[dim]use --force to send anyway[/]")
+            return 1
+        incident.state = "patch_proposed"  # local override; not persisted
+    result = post_incident(incident, dry_run=args.dry_run)
+    if result.get("dry_run"):
+        console.print("[dim](dry run — printed payload above; set SLACK_INCOMING_WEBHOOK to send)[/]")
+    else:
+        console.print(f"[green]sent[/] http {result.get('status')}")
+    return 0
+
+
 def _cmd_score_finpay(args: argparse.Namespace) -> int:
     from .pipeline.scorer import score_window, _parse_window
 
@@ -308,6 +335,12 @@ def main(argv: list[str] | None = None) -> int:
         help="FinPay HTTP endpoint for the baseline eval run",
     )
     iv.set_defaults(func=_cmd_investigate)
+
+    nf = sub.add_parser("notify", help="post an incident's Slack card (uses webhook env, or dry-run)")
+    nf.add_argument("incident_id")
+    nf.add_argument("--dry-run", action="store_true", help="print payload, don't post")
+    nf.add_argument("--force", action="store_true", help="send even if state isn't patch_proposed")
+    nf.set_defaults(func=_cmd_notify)
 
     args = p.parse_args(argv)
     try:

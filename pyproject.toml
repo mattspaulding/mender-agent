@@ -20,6 +20,7 @@ dependencies = [
     "uvicorn[standard]",
     "pydantic",
     "jinja2",
+    "python-multipart",
     # State
     "google-cloud-firestore",
     "google-cloud-storage",

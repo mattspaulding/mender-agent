@@ -167,12 +167,69 @@ def about(request: Request) -> Response:
 
 
 @app.post("/api/approve-patch")
-async def approve_patch(_: Request) -> dict:
-    """Slack interactive callback — stub until D1/D2 land."""
-    return {
-        "ok": False,
-        "detail": "approve-patch not yet implemented (component D2)",
-    }
+async def approve_patch(request: Request) -> JSONResponse:
+    """Slack interactive callback (component D2).
+
+    Slack POSTs application/x-www-form-urlencoded with a `payload` field
+    containing the action JSON. We verify the HMAC signature, look up
+    the incident, and either promote_to_live() (D3) or dismiss.
+    """
+    import json as _json
+
+    from ..integrations.slack import (
+        post_confirmation,
+        verify_signature,
+    )
+    from ..pipeline.incident import IncidentStore
+    from ..pipeline.staging import promote_to_live
+
+    # Read body up-front so we can verify the signature.
+    body = await request.body()
+    sig = request.headers.get("x-slack-signature", "")
+    ts = request.headers.get("x-slack-request-timestamp", "")
+    if not verify_signature(body=body, timestamp=ts, signature=sig):
+        return JSONResponse({"ok": False, "error": "bad signature"}, status_code=401)
+
+    # Slack form-encodes the JSON in a `payload` field.
+    form = await request.form()
+    raw = form.get("payload")
+    if not raw:
+        return JSONResponse({"ok": False, "error": "missing payload"}, status_code=400)
+    try:
+        payload = _json.loads(raw if isinstance(raw, str) else raw.decode())
+    except _json.JSONDecodeError:
+        return JSONResponse({"ok": False, "error": "bad payload"}, status_code=400)
+
+    actions = payload.get("actions") or []
+    if not actions:
+        return JSONResponse({"ok": False, "error": "no actions"}, status_code=400)
+    action = actions[0]
+    action_id = action.get("action_id", "")
+    incident_id = action.get("value", "")
+
+    store = IncidentStore()
+    incident = next((i for i in store.list_all() if i.id == incident_id), None)
+    if incident is None:
+        return JSONResponse({"ok": False, "error": "incident not found"}, status_code=404)
+
+    if action_id == "approve_patch":
+        if incident.state != "patch_proposed" or not incident.patch:
+            return JSONResponse({"ok": False, "error": f"incident in state {incident.state}"}, status_code=409)
+        from ..pipeline.patch_gen import Patch
+        patch = Patch(**incident.patch)
+        promote_to_live(patch)
+        incident.transition("patch_applied", note=f"promoted {patch.base_version}->{patch.new_version}")
+        store.upsert(incident)
+        post_confirmation(incident, action="applied")
+        return JSONResponse({"ok": True, "state": "patch_applied"})
+
+    if action_id == "discard_patch":
+        incident.transition("dismissed", note="discarded by user")
+        store.upsert(incident)
+        post_confirmation(incident, action="discarded")
+        return JSONResponse({"ok": True, "state": "dismissed"})
+
+    return JSONResponse({"ok": False, "error": f"unknown action {action_id!r}"}, status_code=400)
 
 
 # ---------- helpers ----------
