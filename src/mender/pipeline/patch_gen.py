@@ -151,4 +151,9 @@ def _gemini_json(prompt: str, *, model: str) -> dict:
     text = (response.text or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
-    return json.loads(text)
+    parsed = json.loads(text)
+    if isinstance(parsed, list):
+        parsed = parsed[0] if parsed else {}
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed

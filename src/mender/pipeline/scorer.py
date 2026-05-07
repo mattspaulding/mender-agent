@@ -101,7 +101,8 @@ def _build_judge_prompt(span: Span) -> str:
 
 
 def _parse_judge_response(text: str) -> ScoreResult:
-    """Tolerant parse: judge sometimes wraps JSON in code fences."""
+    """Tolerant parse: judge sometimes wraps JSON in code fences or
+    in a single-element array."""
     raw = text.strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
@@ -109,6 +110,10 @@ def _parse_judge_response(text: str) -> ScoreResult:
         obj = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"judge returned non-JSON: {raw[:120]}") from e
+    if isinstance(obj, list):
+        obj = obj[0] if obj else {}
+    if not isinstance(obj, dict):
+        raise ValueError(f"judge returned non-object: {raw[:120]}")
     label = str(obj.get("label", "")).lower().strip()
     if label not in {"pass", "partial", "fail", "n_a", "n/a"}:
         raise ValueError(f"unknown label: {label!r}")
@@ -139,7 +144,8 @@ def _score_with_gemini(prompt: str, *, model: str) -> ScoreResult:
         contents=prompt,
         config={"response_mime_type": "application/json"},
     )
-    return _parse_judge_response(response.text or "")
+    text = (response.text or "")
+    return _parse_judge_response(text)
 
 
 def score_window(

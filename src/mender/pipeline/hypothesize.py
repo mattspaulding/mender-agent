@@ -169,4 +169,11 @@ def _gemini_json(prompt: str, *, model: str) -> dict[str, Any]:
     text = (response.text or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
-    return json.loads(text)
+    parsed = json.loads(text)
+    # Models occasionally wrap a single object in a one-element array
+    # despite the prompt asking for a bare object — unwrap defensively.
+    if isinstance(parsed, list):
+        parsed = parsed[0] if parsed else {}
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
