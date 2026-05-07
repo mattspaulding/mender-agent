@@ -250,6 +250,13 @@ def _cmd_investigate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_stage_demo(args: argparse.Namespace) -> int:
+    from .demo import stage_demo
+
+    stage_demo(phase1=args.phase1, phase2=args.phase2)
+    return 0
+
+
 def _cmd_notify(args: argparse.Namespace) -> int:
     """Send (or dry-run) the Slack incident card for a stored incident."""
     from .integrations.slack import post_incident
@@ -341,6 +348,14 @@ def main(argv: list[str] | None = None) -> int:
     nf.add_argument("--dry-run", action="store_true", help="print payload, don't post")
     nf.add_argument("--force", action="store_true", help="send even if state isn't patch_proposed")
     nf.set_defaults(func=_cmd_notify)
+
+    sd = sub.add_parser(
+        "stage-demo",
+        help="reset local state + drive v1 traffic + flip to v2 + score (G1)",
+    )
+    sd.add_argument("--phase1", default="5m", help="duration of v1 traffic")
+    sd.add_argument("--phase2", default="3m", help="duration of v2 (regressed) traffic")
+    sd.set_defaults(func=_cmd_stage_demo)
 
     args = p.parse_args(argv)
     try:

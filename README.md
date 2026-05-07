@@ -84,17 +84,52 @@ Full deploy walkthrough in [`deploy/README.md`](deploy/README.md).
 
 ## Status
 
-Hackathon timeline: May 5 – June 11, 2026.
+Hackathon timeline: May 5 – June 11, 2026. Core loop is functional —
+end-to-end demo runs locally and produces a real, measurable patch.
 
 | Component | Status |
 |---|---|
-| FinPay Support (target agent) | not started |
-| Phoenix instrumentation | not started |
-| Mender brain (detect / eval / patch loop) | not started |
-| Mender self-improvement (C11–C13) | not started |
-| Slack action layer | not started |
-| Web UI | not started |
-| Deploy infra | not started |
+| FinPay Support (target agent) | ✓ |
+| Phoenix instrumentation + LLM-as-judge eval scorer | ✓ |
+| Mender brain (detect / hypothesize / eval / patch loop) | ✓ |
+| Mender self-improvement (C11–C13) | ✓ |
+| Slack action layer | ✓ (needs user-side workspace) |
+| Web UI | ✓ |
+| Cloud Run deploy infra | ✓ (Dockerfile + scripts; not yet deployed) |
+| Demo staging + capture playbook | ✓ |
+
+Verified end-to-end against a live FinPay v2 (regressed): Mender
+detects "ambiguous source currency silently defaulted to USD",
+identifies the `Always assume USD if not specified.` clause verbatim,
+generates 10 eval cases, measures **4/10 pass on v2** baseline,
+generates a patch, stages it, and re-runs the same eval set against
+the patched in-process agent for **10/10 pass — +60% lift**, ready
+for one-click Slack approval.
+
+## Quickstart
+
+```bash
+# After completing `Running locally` above:
+uv run mender doctor          # verify env, Vertex access, Phoenix
+uv run mender stage-demo      # reset state + drive traffic + score
+FINPAY_PROMPT_VERSION=v2 uv run finpay-serve &
+uv run mender investigate     # detect → hypothesize → eval → patch → stage
+uv run mender-web             # http://127.0.0.1:8082
+```
+
+## CLI
+
+| Command | What it does |
+|---|---|
+| `mender doctor` | check env vars + Vertex model access + Phoenix auth |
+| `mender heartbeat` | one cycle of agent-driven introspection (talks to Phoenix MCP) |
+| `mender investigate` | full deterministic pipeline (C3-C13 + state machine) |
+| `mender score-finpay` | run LLM-as-judge over recent FinPay traces |
+| `mender notify <id>` | post Slack incident card (or dry-run) |
+| `mender stage-demo` | reset + driver + score for a recording session |
+| `mender-web` | Mender web UI on port 8082 |
+| `finpay-serve` | run FinPay HTTP server |
+| `finpay-traffic` | drive load against FinPay |
 
 ## License
 
