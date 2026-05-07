@@ -36,7 +36,7 @@ from .._telemetry import init_telemetry  # noqa: E402
 
 init_telemetry(project_name="mender-web")
 
-from ..pipeline.incident import IncidentStore  # noqa: E402
+from ..pipeline.incident import IncidentStore, make_store  # noqa: E402
 from ..tools.traces import summarize_eval_trend  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
@@ -80,8 +80,8 @@ app = FastAPI(title="Mender", version="0.1.0")
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
 
 
-def _store() -> IncidentStore:
-    return IncidentStore()
+def _store():
+    return make_store()
 
 
 def _common_ctx(request: Request, **extra) -> dict:
@@ -166,6 +166,34 @@ def about(request: Request) -> Response:
     )
 
 
+@app.post("/heartbeat")
+async def heartbeat(
+    project: str = "finpay-support",
+    window: str = "60m",
+    eval_count: int = 8,
+    finpay_url: str | None = None,
+) -> JSONResponse:
+    """Trigger one full incident pipeline cycle (Cloud Scheduler target)."""
+    from ..pipeline.incident import run_incident_pipeline
+
+    finpay_url = finpay_url or os.environ.get("FINPAY_URL", "http://127.0.0.1:8081")
+    outcome = run_incident_pipeline(
+        target_project=project,
+        window_minutes=_parse_window(window),
+        eval_target_count=eval_count,
+        finpay_url=finpay_url,
+    )
+    body: dict[str, object] = {
+        "ok": True,
+        "elapsed_seconds": outcome.elapsed_seconds,
+        "skipped_reason": outcome.skipped_reason,
+    }
+    if outcome.incident is not None:
+        body["incident_id"] = outcome.incident.id
+        body["state"] = outcome.incident.state
+    return JSONResponse(body)
+
+
 @app.post("/api/approve-patch")
 async def approve_patch(request: Request) -> JSONResponse:
     """Slack interactive callback (component D2).
@@ -180,7 +208,7 @@ async def approve_patch(request: Request) -> JSONResponse:
         post_confirmation,
         verify_signature,
     )
-    from ..pipeline.incident import IncidentStore
+    from ..pipeline.incident import make_store
     from ..pipeline.staging import promote_to_live
 
     # Read body up-front so we can verify the signature.
@@ -207,7 +235,7 @@ async def approve_patch(request: Request) -> JSONResponse:
     action_id = action.get("action_id", "")
     incident_id = action.get("value", "")
 
-    store = IncidentStore()
+    store = make_store()
     incident = next((i for i in store.list_all() if i.id == incident_id), None)
     if incident is None:
         return JSONResponse({"ok": False, "error": "incident not found"}, status_code=404)
@@ -252,9 +280,7 @@ def _inc_view(d: dict) -> dict:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run(
-        "mender.web.app:app",
-        host=os.environ.get("MENDER_WEB_HOST", "127.0.0.1"),
-        port=int(os.environ.get("MENDER_WEB_PORT", "8082")),
-        reload=False,
-    )
+    # Cloud Run sets $PORT; honor it before the service-specific knob.
+    port = int(os.environ.get("PORT") or os.environ.get("MENDER_WEB_PORT", "8082"))
+    host = os.environ.get("MENDER_WEB_HOST", "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
+    uvicorn.run("mender.web.app:app", host=host, port=port, reload=False)

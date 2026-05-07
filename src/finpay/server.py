@@ -59,9 +59,6 @@ async def chat(req: ChatRequest) -> ChatResponse:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run(
-        "finpay.server:app",
-        host=os.environ.get("FINPAY_HOST", "127.0.0.1"),
-        port=int(os.environ.get("FINPAY_PORT", "8081")),
-        reload=False,
-    )
+    port = int(os.environ.get("PORT") or os.environ.get("FINPAY_PORT", "8081"))
+    host = os.environ.get("FINPAY_HOST", "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
+    uvicorn.run("finpay.server:app", host=host, port=port, reload=False)

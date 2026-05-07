@@ -85,9 +85,10 @@ class Incident:
 class IncidentStore:
     """Tiny JSON-file persistence. Thread-safe via a process-wide lock.
 
-    Cloud Run autoscale will need Firestore instead — the interface
-    here (find_open_for_pattern, upsert, list_*) is small enough that
-    a Firestore-backed implementation is a drop-in.
+    Use this for local dev. Cloud Run autoscale (multiple instances
+    sharing state) needs FirestoreIncidentStore — the interface here
+    (find_open_for_pattern, upsert, list_*) is small enough to be a
+    drop-in.
     """
 
     _lock = threading.Lock()
@@ -132,6 +133,61 @@ class IncidentStore:
             self._write(items)
 
 
+class FirestoreIncidentStore:
+    """Firestore-backed store for Cloud Run.
+
+    Same shape as IncidentStore — interchangeable. Pulls credentials
+    from GOOGLE_APPLICATION_CREDENTIALS / ADC. Collection name defaults
+    to "mender-incidents" but is overridable.
+    """
+
+    def __init__(
+        self,
+        *,
+        project: str | None = None,
+        collection: str | None = None,
+    ) -> None:
+        from google.cloud import firestore
+
+        self._fs = firestore.Client(project=project or os.environ.get("GOOGLE_CLOUD_PROJECT"))
+        self._coll = self._fs.collection(
+            collection or os.environ.get("MENDER_FIRESTORE_COLLECTION", "mender-incidents")
+        )
+
+    def list_all(self) -> list[Incident]:
+        return [Incident.from_dict(doc.to_dict()) for doc in self._coll.stream()]
+
+    def list_open(self) -> list[Incident]:
+        return [i for i in self.list_all() if i.state not in {"resolved", "dismissed"}]
+
+    def find_open_for_pattern(self, project: str, pattern: str) -> Incident | None:
+        # Firestore's `==` query on the two fields, then state filter
+        # client-side (so the index footprint stays low).
+        from google.cloud import firestore
+
+        query = (
+            self._coll
+            .where(filter=firestore.FieldFilter("target_project", "==", project))
+            .where(filter=firestore.FieldFilter("cluster_pattern", "==", pattern))
+        )
+        for doc in query.stream():
+            inc = Incident.from_dict(doc.to_dict())
+            if inc.state not in {"resolved", "dismissed"}:
+                return inc
+        return None
+
+    def upsert(self, incident: Incident) -> None:
+        self._coll.document(incident.id).set(incident.to_dict())
+
+
+def make_store() -> IncidentStore | FirestoreIncidentStore:
+    """Return the right store based on env. Default: JSON for local dev."""
+    backend = os.environ.get("MENDER_INCIDENTS_BACKEND", "json").lower()
+    if backend == "firestore":
+        return FirestoreIncidentStore()  # type: ignore[return-value]
+    return IncidentStore()
+
+
 @dataclass
 class PipelineOutcome:
     incident: Incident | None  # None when no failures detected this cycle
@@ -166,7 +222,7 @@ def run_incident_pipeline(
     from ..tools.traces import get_failed_traces
 
     t0 = _dt.now(timezone.utc)
-    store = store or IncidentStore()
+    store = store or make_store()
 
     # 0. Self-introspect (C12) and tune (C13) — read past Mender cycles
     #    and pick this cycle's parameters from the trend.

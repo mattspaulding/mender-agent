@@ -23,7 +23,6 @@ dependencies = [
     "python-multipart",
     # State
     "google-cloud-firestore",
-    "google-cloud-storage",
     "google-cloud-secret-manager",
     # Slack
     "slack-sdk",

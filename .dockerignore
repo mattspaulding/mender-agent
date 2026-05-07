@@ -1,0 +1,25 @@
+# Keep the build context tight.
+.git
+.gitignore
+.github
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+.env
+.env.local
+.mender
+docs
+tests
+prompts/finpay/staging
+prompts/finpay/.live
+_*.py
+*.md
+!README.md
+.dockerignore
+Dockerfile
