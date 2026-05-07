@@ -6,7 +6,7 @@ Routes:
     GET  /charts/eval-trend  - eval-score timeseries page (Scene 4).
     GET  /api/eval-trend     - JSON for the chart, used by external tools.
     GET  /about              - architecture + component map (Scene 7 mirror).
-    GET  /healthz            - liveness probe for Cloud Run.
+    GET  /health             - liveness probe.
     POST /api/approve-patch  - Slack interactive callback (D2; stubbed
                                until D1 lands).
 
@@ -92,8 +92,11 @@ def _common_ctx(request: Request, **extra) -> dict:
     }
 
 
-@app.get("/healthz")
-def healthz() -> dict:
+@app.get("/health")
+def health() -> dict:
+    """Liveness probe. Note: Cloud Run's L7 frontend reserves the
+    exact path `/healthz` and returns its own 404 before the request
+    reaches the app, so we use `/health` as the canonical name."""
     return {"status": "ok"}
 
 

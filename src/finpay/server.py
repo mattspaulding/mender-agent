@@ -1,7 +1,7 @@
 """HTTP server for FinPay Support.
 
 Two endpoints:
-    GET  /healthz           - liveness probe.
+    GET  /health            - liveness probe.
     POST /chat              - body: {"message": "..."}, returns {"reply": "..."}.
 
 That's the contract the traffic generator and Mender's eval runner depend on.
@@ -40,8 +40,10 @@ class ChatResponse(BaseModel):
     prompt_version: str
 
 
-@app.get("/healthz")
-def healthz() -> dict:
+@app.get("/health")
+def health() -> dict:
+    """Liveness probe. Note: Cloud Run's L7 frontend reserves the
+    exact path `/healthz`, so `/health` is the canonical name."""
     v = live_version()
     return {"status": "ok", "prompt_version": v.version, "released_at": v.released_at.isoformat()}
 

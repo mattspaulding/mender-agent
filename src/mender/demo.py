@@ -81,11 +81,11 @@ def start_finpay(version: str, *, port: int = 8081, log_path: Path = Path("/tmp/
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    # Wait for /healthz.
+    # Wait for /health.
     deadline = time.time() + 30
     while time.time() < deadline:
         try:
-            r = httpx.get(f"http://127.0.0.1:{port}/healthz", timeout=2.0)
+            r = httpx.get(f"http://127.0.0.1:{port}/health", timeout=2.0)
             if r.status_code == 200:
                 got = r.json().get("prompt_version")
                 console.print(f"  finpay up @ :{port} on prompt [bold]{got}[/]")

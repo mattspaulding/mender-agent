@@ -274,13 +274,13 @@ def run_incident_pipeline(
     incident.cycle_params = params.to_dict()
     store.upsert(incident)
 
-    # 4. hypothesize. Resolve "live" by asking FinPay's /healthz so the
+    # 4. hypothesize. Resolve "live" by asking FinPay's /health so the
     #    pipeline doesn't desynchronize when the local env disagrees
     #    with what the target server is actually serving.
     import httpx as _httpx
 
     try:
-        r = _httpx.get(f"{finpay_url.rstrip('/')}/healthz", timeout=5.0)
+        r = _httpx.get(f"{finpay_url.rstrip('/')}/health", timeout=5.0)
         r.raise_for_status()
         live_version_tag = r.json().get("prompt_version")
     except _httpx.HTTPError:
