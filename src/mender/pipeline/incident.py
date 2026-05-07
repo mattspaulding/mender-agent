@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import string
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -47,6 +48,60 @@ MIN_LIFT = 0.25
 
 # Don't re-run the pipeline for the same pattern more often than this.
 DEDUPE_WINDOW = timedelta(hours=2)
+
+
+# --- pattern fuzzy match ---
+#
+# LLM cluster names drift across cycles: "silent default to USD for
+# ambiguous base currency" vs "...source currency" vs "silent USD
+# default for ambiguous base currency" — same regression, different
+# wording. Exact match would let dedupe miss them and create duplicates.
+# Token-set Jaccard over a normalized form picks them up cleanly without
+# an embedding API call.
+
+_STOPWORDS = {
+    "a", "an", "and", "the", "of", "for", "to", "in", "on", "at",
+    "is", "are", "was", "were", "with", "that", "this", "these", "those",
+    "by", "from", "as", "or", "be", "it",
+}
+
+_PATTERN_THRESHOLD = float(os.environ.get("MENDER_PATTERN_THRESHOLD", "0.5"))
+
+
+def _stem(token: str) -> str:
+    """Lightweight suffix stripper. Collapses common verb/adverb forms
+    so "silent"/"silently" and "default"/"defaulted" hash to the same
+    bucket. Not a full Porter stemmer — we only need enough to absorb
+    the wording drift we actually see in cluster names.
+    """
+    # Order matters — try longer suffixes first.
+    for suffix in ("iously", "ously", "edly", "ies", "ied", "ing", "ly", "ed", "es", "s"):
+        if len(token) > len(suffix) + 2 and token.endswith(suffix):
+            stem = token[: -len(suffix)]
+            # "currencies" -> "currenc" -> add "y" to recover "currency".
+            if suffix == "ies":
+                return stem + "y"
+            return stem
+    return token
+
+
+def _normalize_pattern(text: str) -> frozenset[str]:
+    """Lowercase, strip punctuation, drop stopwords, stem, return token set."""
+    if not text:
+        return frozenset()
+    cleaned = text.lower().translate(str.maketrans("", "", string.punctuation))
+    tokens = [_stem(t) for t in cleaned.split() if t and t not in _STOPWORDS]
+    return frozenset(t for t in tokens if t)
+
+
+def patterns_match(a: str, b: str, *, threshold: float | None = None) -> bool:
+    """True iff Jaccard(normalized(a), normalized(b)) >= threshold."""
+    ta, tb = _normalize_pattern(a), _normalize_pattern(b)
+    if not ta or not tb:
+        return False
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    return (inter / union) >= (threshold if threshold is not None else _PATTERN_THRESHOLD)
 
 
 @dataclass
@@ -116,8 +171,9 @@ class IncidentStore:
         return [i for i in self.list_all() if i.state not in {"resolved", "dismissed"}]
 
     def find_open_for_pattern(self, project: str, pattern: str) -> Incident | None:
+        # Fuzzy match — see patterns_match() for the rationale.
         for i in self.list_open():
-            if i.target_project == project and i.cluster_pattern == pattern:
+            if i.target_project == project and patterns_match(i.cluster_pattern, pattern):
                 return i
         return None
 
@@ -161,18 +217,20 @@ class FirestoreIncidentStore:
         return [i for i in self.list_all() if i.state not in {"resolved", "dismissed"}]
 
     def find_open_for_pattern(self, project: str, pattern: str) -> Incident | None:
-        # Firestore's `==` query on the two fields, then state filter
-        # client-side (so the index footprint stays low).
+        # Pattern wording drifts cycle-to-cycle, so we can't filter on
+        # cluster_pattern in Firestore. Pull all incidents for the
+        # project and fuzzy-match client-side — at hackathon scale
+        # (tens, not millions) this is fine.
         from google.cloud import firestore
 
-        query = (
-            self._coll
-            .where(filter=firestore.FieldFilter("target_project", "==", project))
-            .where(filter=firestore.FieldFilter("cluster_pattern", "==", pattern))
+        query = self._coll.where(
+            filter=firestore.FieldFilter("target_project", "==", project)
         )
         for doc in query.stream():
             inc = Incident.from_dict(doc.to_dict())
-            if inc.state not in {"resolved", "dismissed"}:
+            if inc.state in {"resolved", "dismissed"}:
+                continue
+            if patterns_match(inc.cluster_pattern, pattern):
                 return inc
         return None
 

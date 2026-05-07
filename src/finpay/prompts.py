@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -71,10 +71,45 @@ def list_versions() -> list[PromptVersion]:
 
 
 def live_version() -> PromptVersion:
-    """The currently live FinPay prompt — controlled by env var.
+    """The currently live FinPay prompt.
 
-    Bumping FINPAY_PROMPT_VERSION simulates a "model upgrade event":
-    point Mender at a window that straddles the bump and the regression
-    becomes visible in the eval scores.
+    Resolution order:
+      1. Firestore `mender-state/finpay-support-live` document — if it
+         carries an `instruction` body (Mender's promoted patches do),
+         we build a PromptVersion straight from that and never touch
+         the YAML files. This is how D3 swaps propagate to FinPay's
+         live traffic without redeploys.
+      2. Firestore version tag only — load the matching YAML.
+      3. FINPAY_PROMPT_VERSION env var, default v1 (local dev).
     """
+    try:
+        from mender._state import get_live_prompt
+
+        record = get_live_prompt("finpay-support")
+    except Exception:
+        record = None
+
+    if record:
+        instruction = record.get("instruction")
+        version = record.get("version") or "live"
+        if instruction:
+            ts = record.get("updated_at")
+            try:
+                released_at = datetime.fromisoformat(str(ts).replace("Z", "+00:00")) if ts else datetime.now(timezone.utc)
+            except ValueError:
+                released_at = datetime.now(timezone.utc)
+            return PromptVersion(
+                name="finpay-support",
+                version=version,
+                released_at=released_at,
+                notes=str(record.get("notes", "")),
+                instruction=instruction.strip(),
+                path=_PROMPTS_DIR / f"{version}.yaml",
+            )
+        # Pointer-only — fall through to YAML load by tag.
+        try:
+            return load_version(version)
+        except FileNotFoundError:
+            pass
+
     return load_version(os.environ.get("FINPAY_PROMPT_VERSION", "v1"))

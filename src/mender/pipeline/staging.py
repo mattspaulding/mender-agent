@@ -63,24 +63,21 @@ def apply_patch_to_staging(patch: Patch) -> Path:
 def promote_to_live(patch: Patch, *, finpay_url: str | None = None) -> Path:
     """D3: atomic prompt swap.
 
-    Moves the staging YAML to prompts/finpay/<new_version>.yaml and
-    records the new live version in .live. The staged file is removed
-    so it can't be promoted twice. The old live file is left in place,
-    so this is rollback-able by writing the previous version into .live.
+    Two writes, in order:
 
-    A live FinPay HTTP server still has the OLD prompt loaded in memory
-    until it restarts (or its `live_version` cache invalidates). For
-    Cloud Run, the simplest path is to redeploy with the bumped
-    FINPAY_PROMPT_VERSION env var; for local demos, restart finpay-serve
-    with FINPAY_PROMPT_VERSION pointing at the new version.
+      1. Firestore `mender-state/<target>-live` (when enabled) — this
+         is what FinPay's per-request `live_version()` reads, so the
+         flip is visible to live traffic immediately, with no redeploy.
+         The full instruction body ships in the doc so FinPay doesn't
+         need the patched YAML on its container's filesystem.
 
-    Args:
-        patch: the Patch returned from generate_patch().
-        finpay_url: reserved — future revisions will hit a /admin/reload
-            endpoint to make the swap zero-downtime.
+      2. Local `prompts/finpay/<new_version>.yaml` + `.live` pointer
+         — kept for parity with local dev (where the YAML file IS
+         the source of truth). Atomic rename within one filesystem.
 
-    Returns:
-        Path to the new live YAML file.
+    The staged file is removed so it can't be promoted twice. Old
+    version files stay in place, so a rollback just writes the prior
+    version tag into Firestore (or `.live` locally).
     """
     staging_path = _STAGING_DIR / f"{patch.new_version}.yaml"
     if not staging_path.exists():
@@ -88,16 +85,41 @@ def promote_to_live(patch: Patch, *, finpay_url: str | None = None) -> Path:
             f"staged prompt {patch.new_version} not found at {staging_path}; "
             "did apply_patch_to_staging run for this patch?"
         )
+
+    # Step 1: shared state (production swap visibility).
+    from .._state import set_live_prompt_version
+
+    set_live_prompt_version(
+        target=patch.target_name,
+        version=patch.new_version,
+        instruction=patch.patched_prompt,
+        actor="mender",
+        metadata={
+            "base_version": patch.base_version,
+            "summary": patch.summary,
+            "rationale": patch.rationale,
+        },
+    )
+
+    # Step 2: local filesystem (atomic rename).
     live_path = _PROMPTS_DIR / f"{patch.new_version}.yaml"
-    # Atomic rename within the same filesystem — POSIX guarantees no
-    # partial state.
     staging_path.replace(live_path)
     _LIVE_POINTER.write_text(patch.new_version)
     return live_path
 
 
 def current_live_version() -> str | None:
-    """Return the version recorded in `.live`, or None if unset."""
+    """Return the live version. Firestore first (if enabled), else `.live`."""
+    try:
+        from .._state import get_live_prompt_version
+
+        v = get_live_prompt_version("finpay-support", env_fallback="__none__")
+        if v and v != "v1":
+            # `v1` is the env_fallback default; bool-check whether
+            # Firestore actually answered by passing a sentinel env name.
+            return v
+    except Exception:
+        pass
     if not _LIVE_POINTER.exists():
         return None
     return _LIVE_POINTER.read_text().strip() or None
