@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
+import yaml  # noqa: F401  (used by promote_to_live below)
 
 from finpay.tools import get_exchange_rate
 
@@ -60,33 +60,24 @@ def apply_patch_to_staging(patch: Patch) -> Path:
     return path
 
 
-def promote_to_live(patch: Patch, *, finpay_url: str | None = None) -> Path:
+def promote_to_live(patch: Patch, *, finpay_url: str | None = None) -> Path | None:
     """D3: atomic prompt swap.
 
-    Two writes, in order:
+    Source of truth is Firestore — FinPay's per-request `live_version()`
+    reads from there, so the flip is visible to live traffic
+    immediately with no redeploy. The full instruction body ships in
+    the Firestore doc so FinPay doesn't need the patched YAML on its
+    container's filesystem.
 
-      1. Firestore `mender-state/<target>-live` (when enabled) — this
-         is what FinPay's per-request `live_version()` reads, so the
-         flip is visible to live traffic immediately, with no redeploy.
-         The full instruction body ships in the doc so FinPay doesn't
-         need the patched YAML on its container's filesystem.
+    The patch body comes from `patch.patched_prompt` (already in the
+    incident record) — we don't depend on the local staging file
+    because Cloud Run instances are stateless and the staging write
+    may have happened on a different instance/revision.
 
-      2. Local `prompts/finpay/<new_version>.yaml` + `.live` pointer
-         — kept for parity with local dev (where the YAML file IS
-         the source of truth). Atomic rename within one filesystem.
-
-    The staged file is removed so it can't be promoted twice. Old
-    version files stay in place, so a rollback just writes the prior
-    version tag into Firestore (or `.live` locally).
+    Returns the local YAML path when a local file move actually
+    occurred (useful for local dev), otherwise None.
     """
-    staging_path = _STAGING_DIR / f"{patch.new_version}.yaml"
-    if not staging_path.exists():
-        raise FileNotFoundError(
-            f"staged prompt {patch.new_version} not found at {staging_path}; "
-            "did apply_patch_to_staging run for this patch?"
-        )
-
-    # Step 1: shared state (production swap visibility).
+    # Step 1: Firestore — production swap visibility.
     from .._state import set_live_prompt_version
 
     set_live_prompt_version(
@@ -101,11 +92,42 @@ def promote_to_live(patch: Patch, *, finpay_url: str | None = None) -> Path:
         },
     )
 
-    # Step 2: local filesystem (atomic rename).
-    live_path = _PROMPTS_DIR / f"{patch.new_version}.yaml"
-    staging_path.replace(live_path)
-    _LIVE_POINTER.write_text(patch.new_version)
-    return live_path
+    # Step 2: local filesystem — best effort. Only meaningful when the
+    # staging file is on this instance's disk (i.e. local dev).
+    staging_path = _STAGING_DIR / f"{patch.new_version}.yaml"
+    if staging_path.exists():
+        live_path = _PROMPTS_DIR / f"{patch.new_version}.yaml"
+        staging_path.replace(live_path)
+        try:
+            _LIVE_POINTER.write_text(patch.new_version)
+        except OSError:
+            pass
+        return live_path
+
+    # No local staging file — write a freshly-materialized YAML out so
+    # `prompts/finpay/<v>.yaml` exists on this instance for parity, but
+    # don't fail if the filesystem is read-only or the dir doesn't exist.
+    try:
+        _PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+        live_path = _PROMPTS_DIR / f"{patch.new_version}.yaml"
+        document = {
+            "name": patch.target_name,
+            "version": patch.new_version,
+            "released_at": datetime.now(timezone.utc).isoformat(),
+            "notes": (
+                f"Promoted from {patch.base_version}. "
+                f"{patch.summary} — {patch.rationale}"
+            ),
+            "instruction": patch.patched_prompt,
+        }
+        live_path.write_text(yaml.safe_dump(document, sort_keys=False))
+        try:
+            _LIVE_POINTER.write_text(patch.new_version)
+        except OSError:
+            pass
+        return live_path
+    except OSError:
+        return None
 
 
 def current_live_version() -> str | None:
