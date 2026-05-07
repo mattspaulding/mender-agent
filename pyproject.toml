@@ -19,6 +19,7 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "pydantic",
+    "jinja2",
     # State
     "google-cloud-firestore",
     "google-cloud-storage",
@@ -43,6 +44,7 @@ dev = [
 
 [project.scripts]
 mender = "mender.cli:main"
+mender-web = "mender.web.app:main"
 finpay-serve = "finpay.server:main"
 finpay-traffic = "finpay.traffic:main"
 

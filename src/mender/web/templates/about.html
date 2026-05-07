@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}about — Mender{% endblock %}
+{% block content %}
+
+<h1>About Mender</h1>
+
+<div class="card">
+  <p>Mender is an autonomous agent that watches other agents in production. It reads their traces and eval scores via the <a href="https://github.com/Arize-ai/phoenix">Arize Phoenix</a> MCP server, finds quality regressions, hypothesizes the root cause, generates and runs targeted evals, drafts a prompt patch, and asks for one-click approval in Slack.</p>
+  <p>Built for the Google Cloud Rapid Agent Hackathon, Arize track.</p>
+</div>
+
+<h2>The loop</h2>
+<div class="card">
+  <pre>
+   ┌─────────────────────────────────────────────────────────┐
+   │  every 15 min · Cloud Scheduler · Cloud Run             │
+   └─────────────────────────────────────────────────────────┘
+                                ↓
+       ┌────────────┐    ┌──────────────────┐    ┌─────────────┐
+       │  Phoenix   │ ←─ │  Mender (Gemini) │ ─→ │  FinPay     │
+       │  (traces,  │    │  ADK + MCP       │    │  (target)   │
+       │   evals,   │ ─→ │                  │ ←─ │  ADK        │
+       │   prompts) │    └──────────────────┘    └─────────────┘
+       └────────────┘             ↓
+                          ┌──────────────┐
+                          │  Slack       │   ← Block Kit incident card
+                          │  webhook     │      with Approve/Discard
+                          └──────────────┘
+  </pre>
+</div>
+
+<h2>Components</h2>
+<div class="card">
+  <table>
+    <tbody>
+      <tr><td class="mono dim">A</td><td>FinPay Support — the deliberately fragile target agent</td></tr>
+      <tr><td class="mono dim">B</td><td>OpenInference instrumentation + LLM-as-judge eval scorer</td></tr>
+      <tr><td class="mono dim">C1–C2</td><td>Mender ADK agent + Phoenix MCP toolset</td></tr>
+      <tr><td class="mono dim">C3</td><td>Typed trace tools (timeseries, drill-down)</td></tr>
+      <tr><td class="mono dim">C4–C5</td><td>Failure clustering + hypothesis generation</td></tr>
+      <tr><td class="mono dim">C6–C7</td><td>Eval-set generator + runner</td></tr>
+      <tr><td class="mono dim">C8–C9</td><td>Patch generator + staging mechanism</td></tr>
+      <tr><td class="mono dim">C10</td><td>Incident state machine</td></tr>
+      <tr><td class="mono dim">D</td><td>Slack action layer (Block Kit + interactive Approve)</td></tr>
+      <tr><td class="mono dim">E</td><td>Web UI (this app)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>Repo</h2>
+<div class="card">
+  <p><a href="https://github.com/mattspaulding/mender-agent">github.com/mattspaulding/mender-agent</a> · MIT</p>
+</div>
+
+{% endblock %}

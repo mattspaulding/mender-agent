@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}eval trend — Mender{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+{% block content %}
+
+<h1>Eval-score timeseries <span class="dim">— {{ project }}, last {{ window_minutes }}m</span></h1>
+
+<div class="card">
+  <div style="height:340px"><canvas id="chart"></canvas></div>
+  <div class="dim" style="margin-top:10px; font-size:13px">
+    Trend: <span class="mono">{{ trend.summary.trend }}</span>
+    {% if trend.summary.regression_detected %}
+      <span class="badge fail" style="margin-left:8px">regression detected</span>
+    {% endif %}
+    {% if trend.summary.earliest_score is not none %}
+      &nbsp;·&nbsp; earliest {{ "%.2f"|format(trend.summary.earliest_score) }} → latest {{ "%.2f"|format(trend.summary.latest_score) }}
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h3>Bucket detail</h3>
+  <table>
+    <thead><tr><th>bucket</th><th>count</th><th>avg</th><th>pass</th><th>fail</th><th>n/a</th></tr></thead>
+    <tbody>
+      {% for b in trend.buckets %}
+      <tr>
+        <td class="dim">{{ b.bucket_start|short_ts }}</td>
+        <td>{{ b.count }}</td>
+        <td>{% if b.avg_score is not none %}{{ "%.2f"|format(b.avg_score) }}{% else %}<span class="faint">—</span>{% endif %}</td>
+        <td>{{ b.pass_count }}</td>
+        <td>{{ b.fail_count }}</td>
+        <td class="dim">{{ b.na_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+const trend = {{ trend|tojson }};
+const labels = trend.buckets.map(b => new Date(b.bucket_start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}));
+const scores = trend.buckets.map(b => b.avg_score);
+const counts = trend.buckets.map(b => b.count);
+
+new Chart(document.getElementById('chart'), {
+  type: 'line',
+  data: {
+    labels: labels,
+    datasets: [
+      {
+        label: 'avg eval score',
+        data: scores,
+        borderColor: '#5fd97a',
+        backgroundColor: 'rgba(95,217,122,0.08)',
+        fill: true,
+        tension: 0.25,
+        spanGaps: true,
+        yAxisID: 'y'
+      },
+      {
+        label: 'turns / bucket',
+        data: counts,
+        borderColor: '#6fb6f0',
+        backgroundColor: 'rgba(111,182,240,0.08)',
+        type: 'bar',
+        yAxisID: 'y1'
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: {mode:'index', intersect:false},
+    scales: {
+      y: {
+        min: 0, max: 1,
+        title: {display:true, text:'avg eval score'},
+        grid: {color:'#1c1f26'},
+        ticks: {color:'#7a8088'}
+      },
+      y1: {
+        position:'right', beginAtZero:true,
+        title: {display:true, text:'turns'},
+        grid: {drawOnChartArea:false},
+        ticks: {color:'#7a8088'}
+      },
+      x: {
+        grid: {color:'#1c1f26'},
+        ticks: {color:'#7a8088'}
+      }
+    },
+    plugins: {
+      legend: {labels: {color:'#d4d8dd'}}
+    }
+  }
+});
+</script>
+
+{% endblock %}

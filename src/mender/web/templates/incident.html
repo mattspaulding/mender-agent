@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}incident {{ inc.id }} — Mender{% endblock %}
+{% block content %}
+
+<h1>
+  incident <span class="mono dim">{{ inc.id }}</span>
+  <span class="badge {{ inc.state }}" style="margin-left:8px">{{ inc.state }}</span>
+</h1>
+
+<div class="row">
+  <div class="card">
+    <h3>Cluster</h3>
+    <dl class="kv">
+      <dt>pattern</dt><dd>{{ inc.cluster_pattern }}</dd>
+      <dt>traces</dt><dd>{{ inc.affected_trace_ids|length }}</dd>
+      <dt>project</dt><dd>{{ inc.target_project }}</dd>
+      <dt>created</dt><dd class="dim">{{ inc.created_at|short_ts }}</dd>
+      <dt>updated</dt><dd class="dim">{{ inc.updated_at|short_ts }}</dd>
+    </dl>
+  </div>
+  {% if inc.baseline_eval %}
+  <div class="card">
+    <h3>Baseline (live)</h3>
+    <div style="font-size:32px; font-weight:600">{{ inc.baseline_eval.pass_count }}<span class="faint">/{{ inc.baseline_eval.results|length }}</span></div>
+    <div class="dim">{{ "%.0f"|format(inc.baseline_eval.pass_rate*100) }}% pass · {{ "%.0f"|format(inc.baseline_eval.duration_seconds) }}s</div>
+  </div>
+  {% endif %}
+  {% if inc.staged_eval %}
+  <div class="card">
+    <h3>Staged (patched)</h3>
+    <div style="font-size:32px; font-weight:600">{{ inc.staged_eval.pass_count }}<span class="faint">/{{ inc.staged_eval.results|length }}</span></div>
+    <div class="dim">{{ "%.0f"|format(inc.staged_eval.pass_rate*100) }}% pass · {{ "%.0f"|format(inc.staged_eval.duration_seconds) }}s</div>
+    {% if inc.baseline_eval %}
+      {% set lift = inc.staged_eval.pass_rate - inc.baseline_eval.pass_rate %}
+      <div style="margin-top:8px"><span class="badge {% if lift>=0 %}pass{% else %}fail{% endif %}">{{ "%+.0f"|format(lift*100) }}%</span> lift</div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if inc.hypothesis %}
+<h2>Hypothesis</h2>
+<div class="card">
+  <p>{{ inc.hypothesis.root_cause }}</p>
+  {% if inc.hypothesis.suspected_prompt_clause %}
+  <h3>Suspected prompt clause</h3>
+  <pre><span class="del">{{ inc.hypothesis.suspected_prompt_clause }}</span></pre>
+  {% endif %}
+  <dl class="kv">
+    <dt>recommended</dt><dd>{{ inc.hypothesis.recommended_action }}</dd>
+    <dt>evidence</dt><dd class="dim">{{ inc.hypothesis.correlation_evidence }}</dd>
+    <dt>confidence</dt><dd>{{ "%.2f"|format(inc.hypothesis.confidence) }}</dd>
+  </dl>
+</div>
+{% endif %}
+
+{% if inc.self_eval %}
+<h2>Mender self-eval <span class="dim">— how well did this cycle perform</span></h2>
+<div class="card">
+  <div class="row">
+    <div class="card" style="flex:1;min-width:160px"><div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em">overall</div><div style="font-size:28px; font-weight:600">{{ "%.2f"|format(inc.self_eval.overall) }}</div></div>
+    <div class="card" style="flex:1;min-width:160px"><div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em">hypothesis correctness</div><div style="font-size:28px; font-weight:600">{{ "%.2f"|format(inc.self_eval.hypothesis_correctness) }}</div></div>
+    <div class="card" style="flex:1;min-width:160px"><div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em">fix effectiveness</div><div style="font-size:28px; font-weight:600">{{ "%.2f"|format(inc.self_eval.fix_effectiveness) }}</div></div>
+    <div class="card" style="flex:1;min-width:160px"><div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em">eval set quality</div><div style="font-size:28px; font-weight:600">{{ "%.2f"|format(inc.self_eval.eval_set_quality) }}</div></div>
+    <div class="card" style="flex:1;min-width:160px"><div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em">token efficiency</div><div style="font-size:28px; font-weight:600">{{ "%.2f"|format(inc.self_eval.token_efficiency) }}</div></div>
+  </div>
+  <p class="dim mono" style="font-size:12px; margin-top:8px">{{ inc.self_eval.explanation }}</p>
+</div>
+{% endif %}
+
+{% if inc.cycle_params %}
+<h2>Cycle parameters <span class="dim">— self-tuned at start of cycle</span></h2>
+<div class="card">
+  <dl class="kv">
+    <dt>eval_target_count</dt><dd>{{ inc.cycle_params.eval_target_count }}</dd>
+    <dt>min_hypothesis_confidence</dt><dd>{{ inc.cycle_params.min_hypothesis_confidence }}</dd>
+    <dt>min_lift</dt><dd>{{ inc.cycle_params.min_lift }}</dd>
+    <dt>cluster_max_failures</dt><dd>{{ inc.cycle_params.cluster_max_failures }}</dd>
+  </dl>
+  {% if inc.cycle_params.notes %}
+  <h3>Tuning notes</h3>
+  <ul class="dim">
+    {% for n in inc.cycle_params.notes %}<li>{{ n }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if inc.introspection %}
+  <h3>Past-cycle introspection</h3>
+  <dl class="kv">
+    <dt>n_cycles_seen</dt><dd>{{ inc.introspection.n_cycles_seen }}</dd>
+    <dt>trend</dt><dd>{{ inc.introspection.trend }}</dd>
+    {% if inc.introspection.avg_overall is not none %}
+    <dt>avg_overall</dt><dd>{{ "%.2f"|format(inc.introspection.avg_overall) }}</dd>
+    {% endif %}
+    {% if inc.introspection.weakest_axis %}
+    <dt>weakest_axis</dt><dd>{{ inc.introspection.weakest_axis }}</dd>
+    {% endif %}
+  </dl>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if inc.patch %}
+<h2>Proposed patch <span class="dim">— {{ inc.patch.base_version }} → {{ inc.patch.new_version }}</span></h2>
+<div class="card">
+  <p>{{ inc.patch.summary }}</p>
+  <div class="diff">{{ inc.patch.unified_diff_html|safe }}</div>
+</div>
+{% endif %}
+
+{% if inc.baseline_eval and inc.baseline_eval.results %}
+<h2>Eval cases</h2>
+<div class="card" style="padding:0">
+  <table>
+    <thead>
+      <tr>
+        <th>case</th>
+        <th>baseline (live)</th>
+        <th>staged</th>
+        <th>baseline judge</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in inc.baseline_eval.results %}
+        {% set st = (inc.staged_eval.results|selectattr("case_id", "equalto", r.case_id)|first) if inc.staged_eval else None %}
+        <tr>
+          <td>
+            <div class="mono">{{ r.case_id }}</div>
+            <div class="dim" style="font-size:12px">{{ r.latency_ms }}ms</div>
+          </td>
+          <td><span class="badge {% if r.passed %}pass{% else %}fail{% endif %}">{% if r.passed %}pass{% else %}fail{% endif %}</span></td>
+          <td>{% if st %}<span class="badge {% if st.passed %}pass{% else %}fail{% endif %}">{% if st.passed %}pass{% else %}fail{% endif %}</span>{% else %}<span class="faint">—</span>{% endif %}</td>
+          <td class="dim" style="max-width:380px">{{ r.explanation }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<h2>State history</h2>
+<div class="card" style="padding:0">
+  <table>
+    <thead><tr><th>at</th><th>from</th><th>to</th><th>note</th></tr></thead>
+    <tbody>
+      {% for h in inc.history %}
+        <tr>
+          <td class="dim">{{ h.at|short_ts }}</td>
+          <td class="dim">{{ h["from"] }}</td>
+          <td><span class="badge {{ h.to }}">{{ h.to }}</span></td>
+          <td class="dim">{{ h.note }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

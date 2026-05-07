@@ -63,6 +63,9 @@ class Incident:
     created_at: str  # ISO timestamp
     updated_at: str
     history: list[dict] = field(default_factory=list)  # state transitions
+    introspection: dict[str, Any] | None = None  # C12 summary for this cycle
+    cycle_params: dict[str, Any] | None = None  # C13 params used this cycle
+    self_eval: dict[str, Any] | None = None  # C11 self-score for this cycle
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -165,8 +168,22 @@ def run_incident_pipeline(
     t0 = _dt.now(timezone.utc)
     store = store or IncidentStore()
 
+    # 0. Self-introspect (C12) and tune (C13) — read past Mender cycles
+    #    and pick this cycle's parameters from the trend.
+    from .self_introspect import summarize_past_cycles
+    from .self_tune import tune
+
+    introspection = summarize_past_cycles()
+    params = tune(introspection)
+    eval_target_count = params.eval_target_count
+    min_lift = params.min_lift
+
     # 1. detect + cluster
-    failures = get_failed_traces(window_minutes=window_minutes, project=target_project, max_n=20)["rows"]
+    failures = get_failed_traces(
+        window_minutes=window_minutes,
+        project=target_project,
+        max_n=params.cluster_max_failures,
+    )["rows"]
     if not failures:
         return PipelineOutcome(None, "no failures in window", _elapsed(t0))
     clusters = cluster_failures(failures)
@@ -197,6 +214,8 @@ def run_incident_pipeline(
     )
     if not existing:
         incident.transition("detected", note=f"{len(top.trace_ids)} affected traces")
+    incident.introspection = introspection.to_dict()
+    incident.cycle_params = params.to_dict()
     store.upsert(incident)
 
     # 4. hypothesize
@@ -209,6 +228,18 @@ def run_incident_pipeline(
     incident.hypothesis = hyp.to_dict()
     incident.transition("hypothesized", note=hyp.suspected_prompt_clause[:60])
     store.upsert(incident)
+
+    # 4b. Bail early if hypothesis confidence is below the tuned threshold.
+    if hyp.confidence < params.min_hypothesis_confidence:
+        incident.transition(
+            "dismissed",
+            note=(
+                f"hypothesis confidence {hyp.confidence:.2f} below "
+                f"threshold {params.min_hypothesis_confidence:.2f}"
+            ),
+        )
+        store.upsert(incident)
+        return PipelineOutcome(incident, "low-confidence hypothesis", _elapsed(t0))
 
     # 5. baseline eval against live FinPay
     eval_set = generate_eval_set(hyp, sample_failures=top.sample_failures, target_count=eval_target_count)
@@ -228,7 +259,7 @@ def run_incident_pipeline(
     incident.staged_eval = staged_run.to_dict()
 
     lift = staged_run.pass_rate - live_run.pass_rate
-    if lift >= MIN_LIFT:
+    if lift >= min_lift:
         incident.transition(
             "patch_proposed",
             note=f"+{lift:.0%} lift ({live_run.pass_count}→{staged_run.pass_count}/{len(staged_run.results)})",
@@ -236,8 +267,18 @@ def run_incident_pipeline(
     else:
         incident.transition(
             "dismissed",
-            note=f"insufficient lift {lift:+.0%} (need {MIN_LIFT:+.0%})",
+            note=f"insufficient lift {lift:+.0%} (need {min_lift:+.0%})",
         )
+    store.upsert(incident)
+
+    # 8. Self-eval (C11) — score the cycle and store it on the incident.
+    #    Phoenix annotation write happens best-effort; if Mender's own
+    #    cycle span isn't available in Phoenix yet, we still keep the
+    #    score on the incident record for the web UI.
+    from .self_eval import score_cycle
+
+    self_eval = score_cycle(incident)
+    incident.self_eval = self_eval.to_dict()
     store.upsert(incident)
 
     return PipelineOutcome(incident, None, _elapsed(t0))

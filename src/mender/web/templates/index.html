@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Mender — incidents{% endblock %}
+{% block content %}
+
+<h1>Recent incidents <span class="dim">— {{ incidents|length }} total</span></h1>
+
+{% if not incidents %}
+<div class="card">
+  <p class="dim">No incidents yet. Run <span class="kbd">mender investigate</span> to detect failures and stage a patch.</p>
+</div>
+{% else %}
+<div class="card" style="padding:0">
+  <table>
+    <thead>
+      <tr>
+        <th>id</th>
+        <th>state</th>
+        <th>pattern</th>
+        <th>baseline</th>
+        <th>staged</th>
+        <th>updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for inc in incidents %}
+      <tr onclick="location.href='/incidents/{{ inc.id }}'" style="cursor:pointer">
+        <td class="mono dim">{{ inc.id }}</td>
+        <td><span class="badge {{ inc.state }}">{{ inc.state }}</span></td>
+        <td>
+          <a href="/incidents/{{ inc.id }}">{{ inc.cluster_pattern }}</a>
+          <div class="dim" style="font-size:12px">{{ inc.affected_trace_ids|length }} traces</div>
+        </td>
+        <td>{% if inc.baseline_eval %}{{ inc.baseline_eval.pass_count }}/{{ inc.baseline_eval.results|length }}<div class="dim" style="font-size:12px">{{ "%.0f"|format(inc.baseline_eval.pass_rate*100) }}%</div>{% else %}<span class="faint">—</span>{% endif %}</td>
+        <td>{% if inc.staged_eval %}{{ inc.staged_eval.pass_count }}/{{ inc.staged_eval.results|length }}<div class="dim" style="font-size:12px">{{ "%.0f"|format(inc.staged_eval.pass_rate*100) }}%</div>{% else %}<span class="faint">—</span>{% endif %}</td>
+        <td class="dim">{{ inc.updated_at|short_ts }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}
