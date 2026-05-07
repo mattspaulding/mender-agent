@@ -6,6 +6,8 @@ Mender is an autonomous agent that watches your production agents — reads thei
 
 Built for the [Google Cloud Rapid Agent Hackathon](https://rapid-agent.devpost.com/) — Arize track.
 
+**Live**: [mender-thj3gr276a-uc.a.run.app](https://mender-thj3gr276a-uc.a.run.app) (Cloud Run, us-central1).
+
 ## How it works
 
 Every fifteen minutes, Mender wakes up and reads the last hour of traces from another agent (the "target") via the Arize Phoenix MCP server. It clusters failures, names the pattern, correlates against recent changes to the target's prompt or model, generates a focused eval set, runs it against the live target, drafts a prompt patch, runs the same evals against the patched version, and — if the patched version measurably improves — posts a structured incident report to Slack with one-click approval.
