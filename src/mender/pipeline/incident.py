@@ -49,6 +49,11 @@ MIN_LIFT = 0.25
 # Don't re-run the pipeline for the same pattern more often than this.
 DEDUPE_WINDOW = timedelta(hours=2)
 
+# Incident states that are terminal for dedupe purposes — a new
+# regression with the same pattern AFTER one of these is a fresh
+# incident, not a continuation.
+_CLOSED_STATES = {"resolved", "dismissed", "patch_applied"}
+
 
 # --- pattern fuzzy match ---
 #
@@ -168,7 +173,9 @@ class IncidentStore:
         return [Incident.from_dict(d) for d in self._read()]
 
     def list_open(self) -> list[Incident]:
-        return [i for i in self.list_all() if i.state not in {"resolved", "dismissed"}]
+        # patch_applied is also terminal for dedupe purposes — if the
+        # regression resurfaces post-fix, it's a fresh incident.
+        return [i for i in self.list_all() if i.state not in _CLOSED_STATES]
 
     def find_open_for_pattern(self, project: str, pattern: str) -> Incident | None:
         # Fuzzy match — see patterns_match() for the rationale.
@@ -214,7 +221,9 @@ class FirestoreIncidentStore:
         return [Incident.from_dict(doc.to_dict()) for doc in self._coll.stream()]
 
     def list_open(self) -> list[Incident]:
-        return [i for i in self.list_all() if i.state not in {"resolved", "dismissed"}]
+        # patch_applied is also terminal for dedupe purposes — if the
+        # regression resurfaces post-fix, it's a fresh incident.
+        return [i for i in self.list_all() if i.state not in _CLOSED_STATES]
 
     def find_open_for_pattern(self, project: str, pattern: str) -> Incident | None:
         # Pattern wording drifts cycle-to-cycle, so we can't filter on
@@ -228,7 +237,7 @@ class FirestoreIncidentStore:
         )
         for doc in query.stream():
             inc = Incident.from_dict(doc.to_dict())
-            if inc.state in {"resolved", "dismissed"}:
+            if inc.state in _CLOSED_STATES:
                 continue
             if patterns_match(inc.cluster_pattern, pattern):
                 return inc
