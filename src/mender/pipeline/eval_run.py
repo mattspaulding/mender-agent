@@ -57,21 +57,43 @@ class EvalRun:
         }
 
 
-# An agent endpoint is anything that takes a string input and returns
-# a string output. The default is an HTTP caller that hits FinPay's
-# /chat endpoint; tests can pass a Python callable.
-AgentCallable = Callable[[str], str]
+@dataclass
+class AgentResponse:
+    """Reply text plus the OTel ids of the underlying trace, when available.
+
+    The eval runner uses trace_id/span_id (when populated) to write a
+    trace annotation immediately after judging the case. If the
+    endpoint can't surface those (e.g. an in-process callable that
+    isn't OTel-instrumented), they remain empty and we fall back to
+    just storing the result on the EvalRun.
+    """
+
+    reply: str
+    trace_id: str = ""
+    span_id: str = ""
+
+
+# An agent endpoint takes a string input and returns AgentResponse.
+# The default is an HTTP caller that hits FinPay's /chat endpoint;
+# in-process callables build their own AgentResponse.
+AgentCallable = Callable[[str], AgentResponse]
 
 
 def http_endpoint(base_url: str, *, timeout: float = 120.0) -> AgentCallable:
-    """Build a callable that POSTs to <base_url>/chat and returns reply text."""
+    """Build a callable that POSTs to <base_url>/chat and returns
+    AgentResponse, including the trace/span IDs FinPay exposes."""
     base = base_url.rstrip("/")
 
-    def _call(message: str) -> str:
+    def _call(message: str) -> AgentResponse:
         with httpx.Client(timeout=timeout) as client:
             r = client.post(f"{base}/chat", json={"message": message})
             r.raise_for_status()
-            return r.json().get("reply", "")
+            body = r.json() or {}
+            return AgentResponse(
+                reply=body.get("reply", ""),
+                trace_id=body.get("trace_id", ""),
+                span_id=body.get("span_id", ""),
+            )
 
     return _call
 
@@ -128,6 +150,13 @@ def run_eval_set(
         os.environ.get("MENDER_MODEL", "gemini-3-flash-preview"),
     )
 
+    # Lazy-import the Phoenix annotation writer so that local-only
+    # callers (no Phoenix creds in the env) don't pay for it.
+    annotate_target_project = os.environ.get(
+        "MENDER_EVAL_ANNOTATION_PROJECT", "finpay-support"
+    )
+    _phoenix_writer = _build_phoenix_writer(annotate_target_project)
+
     t0 = time.monotonic()
     results: list[EvalResult] = []
     for case in eval_set.cases:
@@ -149,15 +178,26 @@ def run_eval_set(
                 on_progress(result)
             continue
 
+        # Normalize: tolerate legacy callables that still return a bare
+        # string (older tests etc.). New canonical shape is AgentResponse.
+        if isinstance(response, AgentResponse):
+            reply = response.reply
+            trace_id = response.trace_id
+            span_id = response.span_id
+        else:
+            reply = response
+            trace_id = ""
+            span_id = ""
+
         try:
-            passed, score, explanation = _judge_case(case, response, model=judge_model)
+            passed, score, explanation = _judge_case(case, reply, model=judge_model)
         except Exception as e:
             result = EvalResult(
                 case_id=case.id,
                 passed=False,
                 score=0.0,
                 explanation="",
-                response=response[:300],
+                response=reply[:300],
                 latency_ms=int((time.monotonic() - case_t0) * 1000),
                 error=f"judge error: {e.__class__.__name__}: {e}"[:200],
             )
@@ -171,12 +211,28 @@ def run_eval_set(
             passed=passed,
             score=score,
             explanation=explanation,
-            response=response[:300],
+            response=reply[:300],
             latency_ms=int((time.monotonic() - case_t0) * 1000),
         )
         results.append(result)
         if on_progress:
             on_progress(result)
+
+        # Phoenix annotation — same `currency_conversion` name so the
+        # trace-list label column populates for eval-runner traffic
+        # too. Without this, the baseline-eval traces (which hit live
+        # FinPay's /chat) appear in the trace list with a blank chip.
+        if _phoenix_writer is not None and (trace_id or span_id):
+            label = "pass" if passed else "fail"
+            _phoenix_writer(
+                trace_id=trace_id,
+                span_id=span_id,
+                name="currency_conversion",
+                label=label,
+                score=score,
+                explanation=f"[eval:{case.id}] {explanation}"[:300],
+                target_label=target_label,
+            )
 
     duration = time.monotonic() - t0
     passes = sum(1 for r in results if r.passed and not r.error)
@@ -193,6 +249,70 @@ def run_eval_set(
         duration_seconds=duration,
         results=results,
     )
+
+
+def _build_phoenix_writer(project: str):
+    """Build a closure that writes one trace/span annotation per eval case.
+
+    Returns None if the Phoenix client can't initialize (no creds, etc.).
+    Each invocation is best-effort and logs but doesn't raise on failure
+    so a Phoenix outage never fails an eval cycle.
+    """
+    try:
+        from .._phoenix import PhoenixClient  # noqa: F401
+    except Exception:
+        return None
+
+    def _write(
+        *,
+        trace_id: str,
+        span_id: str,
+        name: str,
+        label: str,
+        score: float,
+        explanation: str,
+        target_label: str,
+    ) -> None:
+        try:
+            from .._phoenix import PhoenixClient as _PC
+
+            payload_result = {
+                "label": label,
+                "score": score,
+                "explanation": explanation,
+            }
+            metadata = {"target_label": target_label, "source": "eval_runner"}
+            with _PC() as ph:
+                if span_id:
+                    ph.annotate_spans(
+                        [
+                            {
+                                "name": name,
+                                "annotator_kind": "LLM",
+                                "span_id": span_id,
+                                "identifier": "v1",
+                                "result": payload_result,
+                                "metadata": metadata,
+                            }
+                        ]
+                    )
+                if trace_id:
+                    ph.annotate_traces(
+                        [
+                            {
+                                "name": name,
+                                "annotator_kind": "LLM",
+                                "trace_id": trace_id,
+                                "identifier": "v1",
+                                "result": payload_result,
+                                "metadata": metadata,
+                            }
+                        ]
+                    )
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+    return _write
 
 
 def _gemini_json(prompt: str, *, model: str) -> dict[str, Any]:

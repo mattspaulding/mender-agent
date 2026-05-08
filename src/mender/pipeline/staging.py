@@ -174,8 +174,10 @@ def simulated_finpay_endpoint(
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.genai import types
+    from opentelemetry import trace as _ot
 
     from .._model import gemini
+    from .eval_run import AgentResponse
 
     label = label or f"staging-{uuid.uuid4().hex[:6]}"
     model_name = model or os.environ.get("FINPAY_MODEL", "gemini-3-flash-preview")
@@ -192,6 +194,7 @@ def simulated_finpay_endpoint(
         app_name=f"finpay-{label}",
         session_service=session_service,
     )
+    tracer = _ot.get_tracer("finpay.simulated")
 
     # Each AgentCallable owns a long-lived background event loop on a
     # worker thread; calling submit() schedules an async coroutine and
@@ -202,25 +205,42 @@ def simulated_finpay_endpoint(
     thread = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()
 
-    async def _ask(message: str) -> str:
-        user_id = f"eval-{uuid.uuid4().hex[:8]}"
-        session = await session_service.create_session(
-            app_name=f"finpay-{label}", user_id=user_id
-        )
-        content = types.Content(role="user", parts=[types.Part.from_text(text=message)])
-        text_out = ""
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session.id,
-            new_message=content,
-        ):
-            if event.is_final_response() and event.content and event.content.parts:
-                for part in event.content.parts:
-                    if getattr(part, "text", None):
-                        text_out = part.text
-        return text_out
+    async def _ask(message: str) -> AgentResponse:
+        # Wrap in our own OTel span (mirroring finpay/_runner.ask) so
+        # the eval runner can pick up trace_id/span_id and write a
+        # trace-list label for staged-eval traffic too. Set the same
+        # OpenInference attributes Phoenix expects.
+        with tracer.start_as_current_span("finpay.handle_chat") as span:
+            span.set_attribute("openinference.span.kind", "AGENT")
+            span.set_attribute("input.mime_type", "text/plain")
+            span.set_attribute("input.value", message)
+            ctx = span.get_span_context()
+            trace_id_hex = format(ctx.trace_id, "032x") if ctx.trace_id else ""
+            span_id_hex = format(ctx.span_id, "016x") if ctx.span_id else ""
 
-    def _call(message: str) -> str:
+            user_id = f"eval-{uuid.uuid4().hex[:8]}"
+            session = await session_service.create_session(
+                app_name=f"finpay-{label}", user_id=user_id
+            )
+            content = types.Content(
+                role="user", parts=[types.Part.from_text(text=message)]
+            )
+            text_out = ""
+            async for event in runner.run_async(
+                user_id=user_id,
+                session_id=session.id,
+                new_message=content,
+            ):
+                if event.is_final_response() and event.content and event.content.parts:
+                    for part in event.content.parts:
+                        if getattr(part, "text", None):
+                            text_out = part.text
+
+            span.set_attribute("output.mime_type", "text/plain")
+            span.set_attribute("output.value", text_out)
+            return AgentResponse(reply=text_out, trace_id=trace_id_hex, span_id=span_id_hex)
+
+    def _call(message: str) -> AgentResponse:
         future = asyncio.run_coroutine_threadsafe(_ask(message), loop)
         return future.result(timeout=120.0)
 
