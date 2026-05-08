@@ -272,9 +272,43 @@ def run_incident_pipeline(
 ) -> PipelineOutcome:
     """Run one full detect→hypothesize→eval→patch→stage→verify cycle.
 
+    Wrapped in a single OTel span so the cycle has a stable trace_id
+    we can attach the self-eval annotation to (and so Phoenix's trace-
+    list view shows the cycle's overall score).
+
     Returns the resulting Incident (in any terminal-for-this-cycle
     state) or None when there's nothing to do.
     """
+    from datetime import datetime as _dt
+
+    from opentelemetry import trace as _ot
+
+    tracer = _ot.get_tracer("mender.pipeline.incident")
+    with tracer.start_as_current_span("mender.cycle") as cycle_span:
+        ctx = cycle_span.get_span_context()
+        cycle_trace_id = format(ctx.trace_id, "032x") if ctx.trace_id else None
+        cycle_span_id = format(ctx.span_id, "016x") if ctx.span_id else None
+        return _run_cycle(
+            target_project=target_project,
+            window_minutes=window_minutes,
+            store=store,
+            eval_target_count=eval_target_count,
+            finpay_url=finpay_url,
+            cycle_span_id=cycle_span_id,
+            cycle_trace_id=cycle_trace_id,
+        )
+
+
+def _run_cycle(
+    *,
+    target_project: str,
+    window_minutes: int,
+    store: IncidentStore | None,
+    eval_target_count: int,
+    finpay_url: str,
+    cycle_span_id: str | None,
+    cycle_trace_id: str | None,
+) -> PipelineOutcome:
     from datetime import datetime as _dt
 
     from finpay.prompts import live_version, list_versions
@@ -409,15 +443,30 @@ def run_incident_pipeline(
         )
     store.upsert(incident)
 
-    # 8. Self-eval (C11) — score the cycle and store it on the incident.
-    #    Phoenix annotation write happens best-effort; if Mender's own
-    #    cycle span isn't available in Phoenix yet, we still keep the
-    #    score on the incident record for the web UI.
-    from .self_eval import score_cycle
+    # 8. Self-eval (C11) — score the cycle and store it on the incident,
+    #    then push the score back to Phoenix as both span and trace
+    #    annotations on Mender's cycle span (for the metrics chart and
+    #    the trace-list view respectively). Failure here is logged but
+    #    doesn't fail the cycle.
+    from .self_eval import score_cycle, write_to_phoenix as _write_self_eval
 
     self_eval = score_cycle(incident)
     incident.self_eval = self_eval.to_dict()
     store.upsert(incident)
+
+    if cycle_span_id:
+        try:
+            _write_self_eval(
+                cycle_span_id,
+                self_eval,
+                cycle_trace_id=cycle_trace_id,
+            )
+        except Exception as e:
+            incident.history.append(
+                {"at": _now_iso(), "from": incident.state, "to": incident.state,
+                 "note": f"self-eval annotation write failed: {e.__class__.__name__}: {e}"}
+            )
+            store.upsert(incident)
 
     # 9. Slack notification (D1). Fires only on patch_proposed; the
     #    poster no-ops with a printout when SLACK_INCOMING_WEBHOOK

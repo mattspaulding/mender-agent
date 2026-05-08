@@ -197,7 +197,13 @@ def score_window(
             f"spans={len(spans)}"
         )
 
-        annotations: list[dict] = []
+        span_annotations: list[dict] = []
+        trace_annotations: list[dict] = []
+        # Same trace can have multiple "invocation" spans only in pathological
+        # cases — but be defensive and only attach one trace annotation per
+        # trace_id (Phoenix would upsert anyway, but it saves an HTTP call).
+        seen_traces: set[str] = set()
+
         for span in spans:
             if span.span_id in already:
                 stats.skipped_already_scored += 1
@@ -222,23 +228,44 @@ def score_window(
                 stats.skipped_non_currency += 1
                 # Still annotate with n/a so we don't re-score next cycle.
             stats.scored += 1
-            annotations.append(
+
+            payload = {
+                "label": result.label,
+                "score": result.score,
+                "explanation": result.explanation,
+            }
+            metadata = {"judge_model": judge_model}
+
+            span_annotations.append(
                 {
                     "name": ANNOTATION_NAME,
                     "annotator_kind": "LLM",
                     "span_id": span.span_id,
                     "identifier": ANNOTATION_IDENTIFIER,
-                    "result": {
-                        "label": result.label,
-                        "score": result.score,
-                        "explanation": result.explanation,
-                    },
-                    "metadata": {"judge_model": judge_model},
+                    "result": payload,
+                    "metadata": metadata,
                 }
             )
 
-        if annotations:
-            ph.annotate_spans(annotations)
+            # Trace-level annotation — what Phoenix's trace-list view
+            # renders. Span annotations don't show there.
+            if span.trace_id and span.trace_id not in seen_traces:
+                seen_traces.add(span.trace_id)
+                trace_annotations.append(
+                    {
+                        "name": ANNOTATION_NAME,
+                        "annotator_kind": "LLM",
+                        "trace_id": span.trace_id,
+                        "identifier": ANNOTATION_IDENTIFIER,
+                        "result": payload,
+                        "metadata": metadata,
+                    }
+                )
+
+        if span_annotations:
+            ph.annotate_spans(span_annotations)
+        if trace_annotations:
+            ph.annotate_traces(trace_annotations)
 
         stats.elapsed_seconds = (datetime.now(timezone.utc) - t0).total_seconds()
         return stats

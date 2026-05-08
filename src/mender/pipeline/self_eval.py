@@ -179,38 +179,70 @@ def write_to_phoenix(
     cycle_span_id: str,
     result: SelfEvalResult,
     *,
+    cycle_trace_id: str | None = None,
     project: str = "mender",
 ) -> dict:
-    """Attach the self-eval scores as a span annotation on Mender's cycle span.
+    """Attach the self-eval scores as Phoenix annotations on Mender's
+    own cycle span AND trace.
 
-    The cycle_span_id is the span_id of Mender's own outermost span for
-    this cycle (heartbeat / investigate run). C12 reads these back next
-    cycle to compute trends.
+    Span annotation: powers the metrics chart and per-span detail panel,
+        plus the C12 self-introspection lookup (find_open_for_pattern,
+        summarize_past_cycles).
+    Trace annotation: what Phoenix's trace-list view renders as a color-
+        coded score column. Without this, the column is blank even if
+        the span annotation is set.
+
+    Args:
+        cycle_span_id: outermost span of this cycle (heartbeat / investigate).
+        cycle_trace_id: OTel trace ID the cycle ran under. Required for
+            the trace-list column to populate. Optional only because
+            some callers haven't been wired yet — passing it is strongly
+            preferred.
+        project: Phoenix project name (defaults to Mender's own).
     """
+    payload = {
+        "score": result.overall,
+        "label": "self_eval",
+        "explanation": result.explanation,
+    }
+    metadata = {
+        "axes": {
+            "hypothesis_correctness": result.hypothesis_correctness,
+            "fix_effectiveness": result.fix_effectiveness,
+            "eval_set_quality": result.eval_set_quality,
+            "token_efficiency": result.token_efficiency,
+        },
+    }
+
     with PhoenixClient() as ph:
-        return ph.annotate_spans(
-            [
-                {
-                    "name": ANNOTATION_NAME,
-                    "annotator_kind": "CODE",
-                    "span_id": cycle_span_id,
-                    "identifier": ANNOTATION_IDENTIFIER,
-                    "result": {
-                        "score": result.overall,
-                        "label": "self_eval",
-                        "explanation": result.explanation,
-                    },
-                    "metadata": {
-                        "axes": {
-                            "hypothesis_correctness": result.hypothesis_correctness,
-                            "fix_effectiveness": result.fix_effectiveness,
-                            "eval_set_quality": result.eval_set_quality,
-                            "token_efficiency": result.token_efficiency,
-                        },
-                    },
-                }
-            ]
-        )
+        out = {
+            "span": ph.annotate_spans(
+                [
+                    {
+                        "name": ANNOTATION_NAME,
+                        "annotator_kind": "CODE",
+                        "span_id": cycle_span_id,
+                        "identifier": ANNOTATION_IDENTIFIER,
+                        "result": payload,
+                        "metadata": metadata,
+                    }
+                ]
+            )
+        }
+        if cycle_trace_id:
+            out["trace"] = ph.annotate_traces(
+                [
+                    {
+                        "name": ANNOTATION_NAME,
+                        "annotator_kind": "CODE",
+                        "trace_id": cycle_trace_id,
+                        "identifier": ANNOTATION_IDENTIFIER,
+                        "result": payload,
+                        "metadata": metadata,
+                    }
+                ]
+            )
+        return out
 
 
 def _gemini_json(prompt: str, *, model: str) -> dict[str, Any]:

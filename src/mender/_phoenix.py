@@ -131,6 +131,33 @@ class PhoenixClient:
         r.raise_for_status()
         return r.json()
 
+    def annotate_traces(
+        self,
+        annotations: list[dict],
+        *,
+        sync: bool = True,
+    ) -> dict:
+        """POST one or more TraceAnnotationData records.
+
+        Same shape as annotate_spans but bound to a `trace_id` (OTel
+        hex, no 0x). Phoenix's trace-list view renders these — span
+        annotations don't show up there. To make a per-trace eval
+        score visible in the trace list, write it both as a span
+        annotation (where the metrics chart and span-detail panel
+        read from) and as a trace annotation (this endpoint).
+
+        Phoenix upserts on (name, identifier, trace_id) so re-running
+        the scorer over the same traces updates rather than duplicates.
+        """
+        params = {"sync": "true" if sync else "false"}
+        r = self._client.post(
+            "/v1/trace_annotations",
+            params=params,
+            json={"data": annotations},
+        )
+        r.raise_for_status()
+        return r.json()
+
 
 def _iso(dt: datetime) -> str:
     s = dt.isoformat()
