@@ -69,6 +69,16 @@ _CURRENCY_EXPLICIT: tuple[str, ...] = (
     "I want to pay 3000 BRL — show me the USD equivalent.",
     "What's €1,200 in GBP?",
     "Convert 88 KRW to USD.",
+    "How much is 450 CHF in MXN?",
+    "Convert ¥85000 JPY to AUD please.",
+    "What's 5000 ZAR in EUR?",
+    "Show me 60 GBP in CNY.",
+    "If I have 1200 NZD, how much is that in USD?",
+    "Convert 25 EUR to TRY.",
+    "What's 2000 SEK in HKD?",
+    "How many DKK is 175 USD?",
+    "Convert 320 NOK to JPY.",
+    "What's $40 USD in INR?",
 )
 
 _CURRENCY_AMBIGUOUS: tuple[str, ...] = (
@@ -84,6 +94,18 @@ _CURRENCY_AMBIGUOUS: tuple[str, ...] = (
     "What's 600 in INR these days?",
     "I want to pay 2500 — what would that be in CAD?",
     "Show me 90 in NOK.",
+    "Send 800 to my contractor in Mumbai — what's that in INR?",
+    "I'm tipping 30 in Singapore, that's how much SGD?",
+    "How much is 120 in francs?",
+    "Convert 6500 to KRW.",
+    "I want to wire 12000 to a supplier in Shanghai — CNY please.",
+    "What's 280 in dollars worth in pesos?",
+    "Send 95 to my friend in Bangkok — how many baht?",
+    "How much is 1750 in zloty?",
+    "Convert 4200 to TRY.",
+    "What's 18 in shekels?",
+    "I owe 540 to a vendor in Mexico City, MXN equivalent?",
+    "Show me 65 in CAD.",
 )
 
 _CURRENCY: tuple[str, ...] = _CURRENCY_EXPLICIT + _CURRENCY_AMBIGUOUS
@@ -94,8 +116,26 @@ _QUERIES: tuple[Query, ...] = tuple(
 )
 
 
+# Without-replacement queues, keyed by (kind, mode). Refilled+reshuffled
+# when exhausted so a long traffic run cycles through the full pool
+# before any prompt repeats. Avoids the "same input over and over" look
+# in Phoenix's trace list during demo capture.
+_QUEUES: dict[tuple[str, str], list[str]] = {}
+
+
+def _next_from(kind: str, mode: str, pool: tuple[str, ...]) -> str:
+    key = (kind, mode)
+    q = _QUEUES.get(key)
+    if not q:
+        q = list(pool)
+        random.shuffle(q)
+        _QUEUES[key] = q
+    return q.pop()
+
+
 def _pick_query(currency_bias: float, question_mode: str = "mixed") -> Query:
-    """Sample one query from the pool.
+    """Sample one query from the pool, without replacement within a
+    sweep through the pool.
 
     Args:
         currency_bias: probability of picking a currency question (vs general).
@@ -107,11 +147,11 @@ def _pick_query(currency_bias: float, question_mode: str = "mixed") -> Query:
     """
     if random.random() < currency_bias:
         if question_mode == "ambiguous-only":
-            return Query(random.choice(_CURRENCY_AMBIGUOUS), "currency")
+            return Query(_next_from("currency", "ambiguous-only", _CURRENCY_AMBIGUOUS), "currency")
         if question_mode == "explicit-only":
-            return Query(random.choice(_CURRENCY_EXPLICIT), "currency")
-        return random.choice([q for q in _QUERIES if q.kind == "currency"])
-    return random.choice([q for q in _QUERIES if q.kind == "general"])
+            return Query(_next_from("currency", "explicit-only", _CURRENCY_EXPLICIT), "currency")
+        return Query(_next_from("currency", "mixed", _CURRENCY), "currency")
+    return Query(_next_from("general", "any", _GENERAL), "general")
 
 
 def _parse_duration(spec: str) -> float:

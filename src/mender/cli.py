@@ -13,14 +13,28 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import re
 import sys
 import uuid
+import warnings
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from rich.console import Console
+
+# Silence noisy third-party warnings + logs that would pollute Scene 3
+# capture (Phoenix telemetry, ADK feature flags, Google ADK content
+# warnings, MCP server startup line). Set MENDER_VERBOSE=1 to opt back
+# in for debugging.
+if not os.environ.get("MENDER_VERBOSE"):
+    warnings.filterwarnings("ignore")
+    logging.getLogger("opentelemetry").setLevel(logging.ERROR)
+    logging.getLogger("google_adk").setLevel(logging.ERROR)
+    logging.getLogger("google.adk").setLevel(logging.ERROR)
+    logging.getLogger("google.genai").setLevel(logging.ERROR)
+    logging.getLogger("phoenix").setLevel(logging.ERROR)
 
 load_dotenv()
 
@@ -50,13 +64,17 @@ async def _run_heartbeat(window_minutes: int, target_project: str) -> int:
     from google.adk.sessions import InMemorySessionService
     from google.genai import types
 
+    from . import mascot
     from .agent import root_agent
 
     cycle_id = uuid.uuid4().hex[:8]
     started = datetime.now(timezone.utc)
 
+    # Mascot wake-up beat — Scene 3 cold-open visual.
+    mascot.wake_up(console)
+
     console.print(
-        f"[bold green][heartbeat][/] {_fmt_time(started)}  cycle [bold]{cycle_id}[/] "
+        f"[bold green]\\[heartbeat][/] {_fmt_time(started)}  cycle [bold]{cycle_id}[/] "
         f"started — scanning last [bold]{window_minutes}m[/] of [bold]{target_project}[/] traces"
     )
     console.print(
@@ -114,9 +132,13 @@ async def _run_heartbeat(window_minutes: int, target_project: str) -> int:
 
     console.print()
     console.print(final_text.strip() or "[dim](no final response)[/]")
+
+    # Mascot result beat — Scene 3 closer.
+    mascot.report(console, mascot.parse_status(final_text))
+
     finished = datetime.now(timezone.utc)
     console.print(
-        f"\n[bold green][heartbeat][/] {_fmt_time(finished)}  cycle [bold]{cycle_id}[/] "
+        f"\n[bold green]\\[heartbeat][/] {_fmt_time(finished)}  cycle [bold]{cycle_id}[/] "
         f"complete — {tool_calls} tool call{'s' if tool_calls != 1 else ''}, "
         f"{(finished - started).total_seconds():.1f}s elapsed"
     )

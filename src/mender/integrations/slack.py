@@ -189,6 +189,8 @@ def post_confirmation(
     webhook_url = webhook_url or os.environ.get("SLACK_INCOMING_WEBHOOK", "").strip()
     dry_run = dry_run if dry_run is not None else not webhook_url
 
+    from .. import mascot
+
     if action == "applied":
         text = (
             f"✅ Patch applied to *{incident.target_project}*: "
@@ -200,7 +202,15 @@ def post_confirmation(
     else:
         raise ValueError(f"unknown action {action!r}")
 
-    payload = {"text": text, "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]}
+    mascot_block_text = mascot.slack_block_for_action(action)
+
+    payload = {
+        "text": text,
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": mascot_block_text}},
+        ],
+    }
 
     if dry_run:
         print(json.dumps(payload, indent=2))
