@@ -220,7 +220,13 @@ def score_inline(
 
 
 def _score_with_gemini(prompt: str, *, model: str) -> ScoreResult:
-    """One judge round-trip via the genai client (raw text in/out)."""
+    """One judge round-trip via the genai client (raw text in/out).
+
+    Hard 30s timeout — the inline-scoring path used to hang
+    indefinitely when Vertex stalled, blocking the entire traffic
+    loop. With this, a stuck judge call surfaces as a TimeoutError
+    that the caller can log and skip past.
+    """
     from google import genai
     from google.genai.types import HttpOptions
 
@@ -230,6 +236,7 @@ def _score_with_gemini(prompt: str, *, model: str) -> ScoreResult:
         location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
         http_options=HttpOptions(
             base_url=os.environ.get("VERTEX_API_HOST", "https://aiplatform.googleapis.com"),
+            timeout=30_000,  # ms — Vertex returns in 1-10s normally; 30s is generous
         ),
     )
     response = client.models.generate_content(

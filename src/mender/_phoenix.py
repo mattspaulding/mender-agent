@@ -114,13 +114,22 @@ class PhoenixClient:
         self,
         annotations: list[dict],
         *,
-        sync: bool = True,
+        sync: bool = False,
     ) -> dict:
         """POST one or more SpanAnnotationData records.
 
         Each record needs: name, annotator_kind, span_id, optionally
         result {label, score, explanation}, metadata, identifier (for
         upsert semantics).
+
+        sync defaults to False because the inline-scoring path writes
+        annotations immediately after capturing the span_id from OTel
+        context — before the span itself has finished flushing to
+        Phoenix Cloud. With sync=True, Phoenix returns 404 ("Spans
+        with IDs X do not exist") for those still-in-flight spans;
+        with sync=False, it queues and links them when the span lands.
+        Batch callers can pass sync=True if they want the strict
+        round-trip.
         """
         params = {"sync": "true" if sync else "false"}
         r = self._client.post(
@@ -164,7 +173,7 @@ class PhoenixClient:
         self,
         annotations: list[dict],
         *,
-        sync: bool = True,
+        sync: bool = False,
     ) -> dict:
         """POST one or more TraceAnnotationData records.
 

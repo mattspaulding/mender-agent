@@ -85,6 +85,14 @@ async def ask(message: str, *, user_id: str | None = None) -> FinPayReply:
     [finpay]" span gets batch-scored, avoiding double-counting.
     """
     with _TRACER.start_as_current_span("finpay.handle_chat") as span:
+        # Annotate with OpenInference semantic attributes so Phoenix's
+        # trace-list view shows kind/input/output for this trace
+        # (otherwise it shows "unknown" / blank because Phoenix reads
+        # from the root span and our wrapper would be the root).
+        span.set_attribute("openinference.span.kind", "AGENT")
+        span.set_attribute("input.mime_type", "text/plain")
+        span.set_attribute("input.value", message)
+
         ctx = span.get_span_context()
         trace_id_hex = format(ctx.trace_id, "032x") if ctx.trace_id else ""
         span_id_hex = format(ctx.span_id, "016x") if ctx.span_id else ""
@@ -104,6 +112,9 @@ async def ask(message: str, *, user_id: str | None = None) -> FinPayReply:
                 for part in event.content.parts:
                     if getattr(part, "text", None):
                         final_text = part.text
+
+        span.set_attribute("output.mime_type", "text/plain")
+        span.set_attribute("output.value", final_text)
 
         return FinPayReply(
             text=final_text,
