@@ -257,9 +257,26 @@ def _cmd_investigate(args: argparse.Namespace) -> int:
 
 
 def _cmd_stage_demo(args: argparse.Namespace) -> int:
+    inline_score = not args.no_inline_score
+    if args.full_arc:
+        from .demo import stage_full_arc
+
+        stage_full_arc(
+            phase_a=args.phase_a,
+            phase_b=args.phase_b,
+            phase_c=args.phase_c,
+            inline_score=inline_score,
+        )
+        return 0
+
     from .demo import stage_demo
 
-    stage_demo(phase1=args.phase1, phase2=args.phase2, currency_bias=args.currency_bias)
+    stage_demo(
+        phase1=args.phase1,
+        phase2=args.phase2,
+        currency_bias=args.currency_bias,
+        inline_score=inline_score,
+    )
     return 0
 
 
@@ -359,8 +376,8 @@ def main(argv: list[str] | None = None) -> int:
         "stage-demo",
         help="reset local state + drive v1 traffic + flip to v2 + score (G1)",
     )
-    sd.add_argument("--phase1", default="5m", help="duration of v1 traffic")
-    sd.add_argument("--phase2", default="3m", help="duration of v2 (regressed) traffic")
+    sd.add_argument("--phase1", default="5m", help="duration of v1 traffic (2-phase mode)")
+    sd.add_argument("--phase2", default="3m", help="duration of v2 traffic (2-phase mode)")
     sd.add_argument(
         "--currency-bias",
         type=float,
@@ -368,6 +385,24 @@ def main(argv: list[str] | None = None) -> int:
         help="fraction of staged traffic that should be currency-conversion "
              "questions (1.0 = all currency, 0.0 = none). Default 1.0 for "
              "clean trace-list view; lower for mixed-corpus runs.",
+    )
+    sd.add_argument(
+        "--full-arc",
+        action="store_true",
+        help="3-act demo: v1 mixed (pass) -> v2 ambiguous-only (fail) -> "
+             "Mender investigate auto-promotes v3 -> v3 ambiguous-only (pass). "
+             "Overrides --phase1/--phase2/--currency-bias; uses --phase-a/-b/-c.",
+    )
+    sd.add_argument("--phase-a", default="5m", help="phase A (v1) duration in --full-arc mode")
+    sd.add_argument("--phase-b", default="3m", help="phase B (v2) duration in --full-arc mode")
+    sd.add_argument("--phase-c", default="3m", help="phase C (v3) duration in --full-arc mode")
+    sd.add_argument(
+        "--no-inline-score",
+        action="store_true",
+        help="opt out of live chip population during traffic. Default is "
+             "to score each turn immediately (chips appear in Phoenix "
+             "within ~3s); --no-inline-score reverts to batch scoring "
+             "at the end of the run.",
     )
     sd.set_defaults(func=_cmd_stage_demo)
 

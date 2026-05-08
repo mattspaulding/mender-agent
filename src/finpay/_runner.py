@@ -22,6 +22,7 @@ from google.adk.agents import Agent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+from opentelemetry import trace as _ot
 
 from mender._model import gemini
 
@@ -64,24 +65,50 @@ class FinPayReply:
     text: str
     session_id: str
     prompt_version: str
+    trace_id: str = ""  # OTel hex (32 char), empty if no active tracer
+    span_id: str = ""  # OTel hex (16 char) of the wrapping handle_chat span
+
+
+_TRACER = _ot.get_tracer("finpay.runner")
 
 
 async def ask(message: str, *, user_id: str | None = None) -> FinPayReply:
-    """Send one user message to FinPay, return the final reply."""
-    version_tag, runner = _resolve()
-    user_id = user_id or f"anon-{uuid.uuid4().hex[:8]}"
-    session = await _session_service.create_session(app_name=_APP_NAME, user_id=user_id)
-    content = types.Content(role="user", parts=[types.Part.from_text(text=message)])
+    """Send one user message to FinPay, return the final reply.
 
-    final_text = ""
-    async for event in runner.run_async(
-        user_id=user_id,
-        session_id=session.id,
-        new_message=content,
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                if getattr(part, "text", None):
-                    final_text = part.text
+    Wrapped in an explicit OTel span ("finpay.handle_chat") so the
+    HTTP layer can return the span_id + trace_id in the response.
+    The traffic driver reads those IDs to score the trace inline
+    (without having to round-trip Phoenix to find the span). The
+    span name deliberately does NOT include the substring
+    "invocation" so the batch scorer's name-filter doesn't pick it
+    up — only the OpenInference auto-instrumented "invocation
+    [finpay]" span gets batch-scored, avoiding double-counting.
+    """
+    with _TRACER.start_as_current_span("finpay.handle_chat") as span:
+        ctx = span.get_span_context()
+        trace_id_hex = format(ctx.trace_id, "032x") if ctx.trace_id else ""
+        span_id_hex = format(ctx.span_id, "016x") if ctx.span_id else ""
 
-    return FinPayReply(text=final_text, session_id=session.id, prompt_version=version_tag)
+        version_tag, runner = _resolve()
+        user_id = user_id or f"anon-{uuid.uuid4().hex[:8]}"
+        session = await _session_service.create_session(app_name=_APP_NAME, user_id=user_id)
+        content = types.Content(role="user", parts=[types.Part.from_text(text=message)])
+
+        final_text = ""
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session.id,
+            new_message=content,
+        ):
+            if event.is_final_response() and event.content and event.content.parts:
+                for part in event.content.parts:
+                    if getattr(part, "text", None):
+                        final_text = part.text
+
+        return FinPayReply(
+            text=final_text,
+            session_id=session.id,
+            prompt_version=version_tag,
+            trace_id=trace_id_hex,
+            span_id=span_id_hex,
+        )

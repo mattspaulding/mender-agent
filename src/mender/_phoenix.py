@@ -131,6 +131,35 @@ class PhoenixClient:
         r.raise_for_status()
         return r.json()
 
+    def list_trace_annotations(
+        self,
+        project: str,
+        *,
+        trace_ids: list[str],
+        include_annotation_names: list[str] | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Fetch annotations for the given trace IDs. Mirrors
+        list_span_annotations but on the trace endpoint. Used by the
+        batch scorer to dedupe against traces that were already scored
+        inline."""
+        if not trace_ids:
+            return []
+        results: list[dict] = []
+        for i in range(0, len(trace_ids), 50):
+            chunk = trace_ids[i : i + 50]
+            params: list[tuple[str, str]] = [("trace_ids", tid) for tid in chunk]
+            params.append(("limit", str(limit)))
+            for name in include_annotation_names or []:
+                params.append(("include_annotation_names", name))
+            r = self._client.get(
+                f"/v1/projects/{project}/trace_annotations",
+                params=params,
+            )
+            r.raise_for_status()
+            results.extend(r.json().get("data", []))
+        return results
+
     def annotate_traces(
         self,
         annotations: list[dict],

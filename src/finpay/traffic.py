@@ -54,28 +54,62 @@ _GENERAL: tuple[str, ...] = (
     "Do you have an API for automating invoices?",
 )
 
-_CURRENCY: tuple[str, ...] = (
+# Currency questions split into two pools:
+#   EXPLICIT  — both source AND target currency stated unambiguously.
+#               v1, v2, and v3 should all handle these correctly.
+#   AMBIGUOUS — at least one side missing or under-specified ("$50",
+#               "Convert 50 to JPY", "send 100 to Mexico"). v1 and v3
+#               ask for clarification; v2 silently defaults to USD.
+_CURRENCY_EXPLICIT: tuple[str, ...] = (
     "Convert 100 EUR to JPY please.",
     "How much is £250 in USD right now?",
-    "I need to send 1500 to a vendor in Mexico — what's that in MXN?",
-    "What's 500 dollars in euros?",  # ambiguous "dollars"
     "Can you tell me 9000 INR in GBP?",
     "If I receive 200 CAD, how much is that in CHF?",
-    "Convert 50 to JPY.",  # ambiguous bare amount
     "How many AUD is 700 SGD?",
-    "75 in CNY, what's that in EUR?",  # ambiguous bare amount
     "I want to pay 3000 BRL — show me the USD equivalent.",
     "What's €1,200 in GBP?",
     "Convert 88 KRW to USD.",
 )
+
+_CURRENCY_AMBIGUOUS: tuple[str, ...] = (
+    "I need to send 1500 to a vendor in Mexico — what's that in MXN?",
+    "What's 500 dollars in euros?",
+    "Convert 50 to JPY.",
+    "75 in CNY, what's that in EUR?",
+    "I have 200 — how much is that in CHF?",
+    "Convert 1000 to AUD please.",
+    "How much is 4000 in pounds?",
+    "I'd like to send 350 to my brother in Japan, can you convert?",
+    "Convert 80 to BRL.",
+    "What's 600 in INR these days?",
+    "I want to pay 2500 — what would that be in CAD?",
+    "Show me 90 in NOK.",
+)
+
+_CURRENCY: tuple[str, ...] = _CURRENCY_EXPLICIT + _CURRENCY_AMBIGUOUS
+
 
 _QUERIES: tuple[Query, ...] = tuple(
     [Query(t, "general") for t in _GENERAL] + [Query(t, "currency") for t in _CURRENCY]
 )
 
 
-def _pick_query(currency_bias: float) -> Query:
+def _pick_query(currency_bias: float, question_mode: str = "mixed") -> Query:
+    """Sample one query from the pool.
+
+    Args:
+        currency_bias: probability of picking a currency question (vs general).
+        question_mode: which currency sub-pool to draw from when picking
+            a currency question. "mixed" samples from the combined
+            currency pool (default). "ambiguous-only" forces the bug-
+            triggering subset; "explicit-only" forces the always-passing
+            subset. The general pool is unaffected.
+    """
     if random.random() < currency_bias:
+        if question_mode == "ambiguous-only":
+            return Query(random.choice(_CURRENCY_AMBIGUOUS), "currency")
+        if question_mode == "explicit-only":
+            return Query(random.choice(_CURRENCY_EXPLICIT), "currency")
         return random.choice([q for q in _QUERIES if q.kind == "currency"])
     return random.choice([q for q in _QUERIES if q.kind == "general"])
 
@@ -89,13 +123,42 @@ def _parse_duration(spec: str) -> float:
     return value * {"s": 1, "m": 60, "h": 3600}[unit]
 
 
-async def _send(client: httpx.AsyncClient, url: str, query: Query) -> tuple[Query, int, str]:
+async def _send(client: httpx.AsyncClient, url: str, query: Query) -> tuple[Query, int, dict | None, str]:
+    """Send one query. Returns (query, status, full_response_dict, error_or_reply)."""
     try:
         r = await client.post(url, json={"message": query.text}, timeout=60.0)
         r.raise_for_status()
-        return query, r.status_code, r.json().get("reply", "")[:120]
+        body = r.json()
+        return query, r.status_code, body, body.get("reply", "")[:120]
     except httpx.HTTPError as e:
-        return query, getattr(e, "response", None) and e.response.status_code or 0, str(e)[:120]
+        return query, getattr(e, "response", None) and e.response.status_code or 0, None, str(e)[:120]
+
+
+def _inline_score(
+    *, trace_id: str, span_id: str, user_input: str, agent_output: str
+) -> tuple[str, float | None] | None:
+    """Score one trace inline. Lazy-imports so traffic without
+    --inline-score doesn't pay for the mender package.
+
+    Returns (label, score) or None on any failure (which we log and
+    continue — never block traffic on judge errors).
+    """
+    try:
+        from mender.pipeline.scorer import score_inline as _score
+    except ImportError as e:
+        console.print(f"  [red]inline-score import failed:[/] {e}")
+        return None
+    try:
+        result = _score(
+            trace_id=trace_id,
+            span_id=span_id,
+            user_input=user_input,
+            agent_output=agent_output,
+        )
+        return result.label, result.score
+    except Exception as e:
+        console.print(f"  [yellow]inline-score error:[/] {e}")
+        return None
 
 
 async def run_async(args: argparse.Namespace) -> None:
@@ -104,7 +167,8 @@ async def run_async(args: argparse.Namespace) -> None:
 
     console.print(
         f"[bold cyan]traffic[/]  target={chat_url}  "
-        f"currency_bias={args.currency_bias}  "
+        f"currency_bias={args.currency_bias}  mode={args.question_mode}  "
+        f"inline_score={args.inline_score}  "
         f"{'count='+str(args.count) if args.count else 'rate='+str(args.rate)+'/min duration='+args.duration}"
     )
 
@@ -119,9 +183,9 @@ async def run_async(args: argparse.Namespace) -> None:
             if deadline and time.monotonic() >= deadline:
                 break
 
-            query = _pick_query(args.currency_bias)
+            query = _pick_query(args.currency_bias, args.question_mode)
             t0 = time.monotonic()
-            q, status, reply = await _send(client, chat_url, query)
+            q, status, body, reply = await _send(client, chat_url, query)
             dt = time.monotonic() - t0
             sent += 1
 
@@ -130,6 +194,38 @@ async def run_async(args: argparse.Namespace) -> None:
                 f"  {tag} {q.kind:8} {dt*1000:5.0f}ms  "
                 f"[dim]{q.text[:60]}[/]  -> [dim]{reply}[/]"
             )
+
+            # Inline scoring: judge the just-completed turn so the chip
+            # lands in Phoenix within ~2-3s of the trace itself.
+            if args.inline_score and status == 200 and body:
+                trace_id = body.get("trace_id", "")
+                span_id = body.get("span_id", "")
+                if trace_id and span_id:
+                    score_t0 = time.monotonic()
+                    res = _inline_score(
+                        trace_id=trace_id,
+                        span_id=span_id,
+                        user_input=q.text,
+                        agent_output=body.get("reply", ""),
+                    )
+                    score_dt = time.monotonic() - score_t0
+                    if res is not None:
+                        label, score = res
+                        chip = {
+                            "pass": "[bold green]pass[/]",
+                            "fail": "[bold red]fail[/]",
+                            "partial": "[yellow]part[/]",
+                            "n_a": "[dim] n/a[/]",
+                        }.get(label, label)
+                        score_str = f"μ {score:.2f}" if score is not None else "μ  -"
+                        console.print(
+                            f"     [dim]→ chip:[/] {chip} {score_str}  "
+                            f"[dim]({score_dt*1000:.0f}ms)[/]"
+                        )
+                else:
+                    console.print(
+                        "     [yellow]→ chip skipped:[/] /chat response missing trace_id/span_id"
+                    )
 
             if interval and (not args.count or sent < args.count):
                 await asyncio.sleep(max(0, interval - dt))
@@ -152,6 +248,27 @@ def main() -> None:
         type=float,
         default=0.6,
         help="fraction of queries that should be currency-conversion (0-1)",
+    )
+    parser.add_argument(
+        "--question-mode",
+        choices=["mixed", "ambiguous-only", "explicit-only"],
+        default="mixed",
+        help=(
+            "how to sample currency questions: 'mixed' uses the full pool "
+            "(default); 'ambiguous-only' restricts to bug-triggering prompts "
+            "(no source currency stated); 'explicit-only' restricts to "
+            "always-passing prompts (both currencies stated)."
+        ),
+    )
+    parser.add_argument(
+        "--inline-score",
+        action="store_true",
+        help=(
+            "after each /chat call, immediately score the trace via "
+            "Gemini-as-judge and write the annotation to Phoenix. Adds "
+            "1–3s per turn but makes the trace-list chip populate live. "
+            "Default off; stage-demo flips it on."
+        ),
     )
     args = parser.parse_args()
     try:

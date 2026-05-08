@@ -38,6 +38,8 @@ class ChatResponse(BaseModel):
     reply: str
     session_id: str
     prompt_version: str
+    trace_id: str  # OTel hex; consumed by inline-scoring traffic driver
+    span_id: str
 
 
 @app.get("/health")
@@ -55,6 +57,8 @@ async def chat(req: ChatRequest) -> ChatResponse:
         reply=result.text,
         session_id=result.session_id,
         prompt_version=result.prompt_version,
+        trace_id=result.trace_id,
+        span_id=result.span_id,
     )
 
 

@@ -25,6 +25,8 @@ from rich.console import Console
 
 from .._phoenix import PhoenixClient, Span
 
+DEFAULT_PROJECT = "finpay-support"
+
 _log = logging.getLogger(__name__)
 _console = Console()
 
@@ -126,6 +128,97 @@ def _parse_judge_response(text: str) -> ScoreResult:
     return ScoreResult(label=label, score=score, explanation=explanation)
 
 
+def _resolve_judge_model(judge_model: str | None) -> str:
+    return judge_model or os.environ.get(
+        "MENDER_JUDGE_MODEL",
+        os.environ.get("MENDER_MODEL", "gemini-3-flash-preview"),
+    )
+
+
+def _annotation_payloads(
+    *,
+    span_id: str,
+    trace_id: str,
+    result: ScoreResult,
+    judge_model: str,
+) -> tuple[list[dict], list[dict]]:
+    """Build (span_annotations, trace_annotations) for one scored turn."""
+    payload = {
+        "label": result.label,
+        "score": result.score,
+        "explanation": result.explanation,
+    }
+    metadata = {"judge_model": judge_model}
+    span_anns = [
+        {
+            "name": ANNOTATION_NAME,
+            "annotator_kind": "LLM",
+            "span_id": span_id,
+            "identifier": ANNOTATION_IDENTIFIER,
+            "result": payload,
+            "metadata": metadata,
+        }
+    ]
+    trace_anns = []
+    if trace_id:
+        trace_anns.append(
+            {
+                "name": ANNOTATION_NAME,
+                "annotator_kind": "LLM",
+                "trace_id": trace_id,
+                "identifier": ANNOTATION_IDENTIFIER,
+                "result": payload,
+                "metadata": metadata,
+            }
+        )
+    return span_anns, trace_anns
+
+
+def score_inline(
+    *,
+    trace_id: str,
+    span_id: str,
+    user_input: str,
+    agent_output: str,
+    project: str = DEFAULT_PROJECT,
+    judge_model: str | None = None,
+) -> ScoreResult:
+    """Score one finished turn immediately and write annotations.
+
+    Used by the traffic driver's --inline-score path: the FinPay /chat
+    response carries the trace_id + span_id, plus the input/output we
+    already have. Skip the Phoenix span fetch — go straight from text
+    to judge call to annotation write.
+
+    Idempotent: writes upsert on (name, identifier, trace_id) and
+    (name, identifier, span_id), so retrying doesn't duplicate.
+    """
+    judge_model = _resolve_judge_model(judge_model)
+    pseudo_span = Span(
+        span_id=span_id,
+        trace_id=trace_id,
+        name="finpay.handle_chat",
+        start_time=datetime.now(timezone.utc),
+        end_time=None,
+        input_text=user_input,
+        output_text=agent_output,
+        raw_attributes={},
+    )
+    result = _score_with_gemini(_build_judge_prompt(pseudo_span), model=judge_model)
+    span_anns, trace_anns = _annotation_payloads(
+        span_id=span_id,
+        trace_id=trace_id,
+        result=result,
+        judge_model=judge_model,
+    )
+    with PhoenixClient() as ph:
+        if span_anns:
+            ph.annotate_spans(span_anns)
+        if trace_anns:
+            ph.annotate_traces(trace_anns)
+    return result
+
+
 def _score_with_gemini(prompt: str, *, model: str) -> ScoreResult:
     """One judge round-trip via the genai client (raw text in/out)."""
     from google import genai
@@ -172,15 +265,22 @@ def score_window(
         # "invocation [finpay]".
         spans = [s for s in spans if "invocation" in s.name.lower()]
 
-        # Existing annotations to dedupe against
+        # Existing annotations to dedupe against. Dedupe on trace_id
+        # (not span_id): the inline-scoring path attaches its
+        # span_annotation to the "finpay.handle_chat" span (a sibling
+        # of "invocation [finpay]" in the same trace), so a span_id
+        # check would miss those and the batch would rescore. The
+        # trace_annotation is unique per trace_id and present on both
+        # the inline and batch paths.
         already: set[str] = set()
         if not rescore and spans:
-            anns = ph.list_span_annotations(
+            trace_ids = list({s.trace_id for s in spans if s.trace_id})
+            anns = ph.list_trace_annotations(
                 project,
-                span_ids=[s.span_id for s in spans],
+                trace_ids=trace_ids,
                 include_annotation_names=[ANNOTATION_NAME],
             )
-            already = {ann.get("span_id") for ann in anns if ann.get("name") == ANNOTATION_NAME}
+            already = {ann.get("trace_id") for ann in anns if ann.get("name") == ANNOTATION_NAME}
 
         stats = WindowStats(
             scanned=len(spans),
@@ -205,7 +305,7 @@ def score_window(
         seen_traces: set[str] = set()
 
         for span in spans:
-            if span.span_id in already:
+            if span.trace_id and span.trace_id in already:
                 stats.skipped_already_scored += 1
                 continue
             try:
