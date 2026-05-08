@@ -266,11 +266,20 @@ def score_window(
     with PhoenixClient() as ph:
         # Fetch spans in window
         spans, _ = ph.list_spans(project, start_time=start, end_time=end, limit=200)
-        # Only score top-level invocation spans (one per user turn) so
-        # we don't double-score nested LLM/tool spans for the same turn.
-        # FinPay's _runner emits one outer span per /chat call named
-        # "invocation [finpay]".
-        spans = [s for s in spans if "invocation" in s.name.lower()]
+        # One canonical span per trace (the user turn). Prefer
+        # "finpay.handle_chat" — our explicit wrapper where inline-
+        # scoring writes annotations. Fall back to OpenInference's
+        # auto "invocation [finpay]" for older traces from before
+        # the wrapper.
+        by_trace: dict[str, Span] = {}
+        for s in spans:
+            if not s.trace_id:
+                continue
+            if s.name == "finpay.handle_chat":
+                by_trace[s.trace_id] = s
+            elif "invocation" in s.name.lower() and s.trace_id not in by_trace:
+                by_trace[s.trace_id] = s
+        spans = list(by_trace.values())
 
         # Existing annotations to dedupe against. Dedupe on trace_id
         # (not span_id): the inline-scoring path attaches its

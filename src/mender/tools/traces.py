@@ -77,8 +77,20 @@ def _list_invocation_spans(
     end = _now()
     start = end - timedelta(minutes=window_minutes)
     spans, _ = ph.list_spans(project, start_time=start, end_time=end, limit=500)
-    # Top-level user-turn span only — matches scorer's filter.
-    return [s for s in spans if "invocation" in s.name.lower()]
+    # One canonical span per trace (the user turn). Prefer
+    # "finpay.handle_chat" — that's our explicit wrapper where
+    # inline-scoring writes span_annotations. Fall back to
+    # OpenInference's auto "invocation [finpay]" for older batch-
+    # scored data that pre-dates the wrapper.
+    by_trace: dict[str, Span] = {}
+    for s in spans:
+        if not s.trace_id:
+            continue
+        if s.name == "finpay.handle_chat":
+            by_trace[s.trace_id] = s  # always wins
+        elif "invocation" in s.name.lower() and s.trace_id not in by_trace:
+            by_trace[s.trace_id] = s  # fallback
+    return list(by_trace.values())
 
 
 def fetch_recent_traces(

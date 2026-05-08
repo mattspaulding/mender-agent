@@ -114,31 +114,31 @@ class PhoenixClient:
         self,
         annotations: list[dict],
         *,
-        sync: bool = False,
+        sync: bool = True,
+        retries: int = 4,
+        backoff_sec: float = 0.6,
     ) -> dict:
         """POST one or more SpanAnnotationData records.
 
-        Each record needs: name, annotator_kind, span_id, optionally
-        result {label, score, explanation}, metadata, identifier (for
-        upsert semantics).
+        sync=True so Phoenix processes the annotation immediately and
+        the trace-list "label" column populates without waiting for
+        async queue drain.
 
-        sync defaults to False because the inline-scoring path writes
-        annotations immediately after capturing the span_id from OTel
-        context — before the span itself has finished flushing to
-        Phoenix Cloud. With sync=True, Phoenix returns 404 ("Spans
-        with IDs X do not exist") for those still-in-flight spans;
-        with sync=False, it queues and links them when the span lands.
-        Batch callers can pass sync=True if they want the strict
-        round-trip.
+        On the inline-scoring path, the span_id may briefly precede
+        the span itself reaching Phoenix Cloud (OpenInference exports
+        on span end; there's a small flush delay). Phoenix returns
+        404 ("Spans with IDs X do not exist") in that window. We
+        retry with exponential backoff up to `retries` times to bridge
+        that race.
         """
-        params = {"sync": "true" if sync else "false"}
-        r = self._client.post(
+        return self._annotate_with_retry(
             "/v1/span_annotations",
-            params=params,
-            json={"data": annotations},
+            annotations,
+            sync=sync,
+            retries=retries,
+            backoff_sec=backoff_sec,
+            kind="Spans",
         )
-        r.raise_for_status()
-        return r.json()
 
     def list_trace_annotations(
         self,
@@ -173,7 +173,9 @@ class PhoenixClient:
         self,
         annotations: list[dict],
         *,
-        sync: bool = False,
+        sync: bool = True,
+        retries: int = 4,
+        backoff_sec: float = 0.6,
     ) -> dict:
         """POST one or more TraceAnnotationData records.
 
@@ -186,13 +188,54 @@ class PhoenixClient:
 
         Phoenix upserts on (name, identifier, trace_id) so re-running
         the scorer over the same traces updates rather than duplicates.
+
+        Same retry behavior as annotate_spans for sync=true 404 races.
         """
-        params = {"sync": "true" if sync else "false"}
-        r = self._client.post(
+        return self._annotate_with_retry(
             "/v1/trace_annotations",
-            params=params,
-            json={"data": annotations},
+            annotations,
+            sync=sync,
+            retries=retries,
+            backoff_sec=backoff_sec,
+            kind="Traces",
         )
+
+    def _annotate_with_retry(
+        self,
+        path: str,
+        annotations: list[dict],
+        *,
+        sync: bool,
+        retries: int,
+        backoff_sec: float,
+        kind: str,
+    ) -> dict:
+        """Shared retry helper for annotate_spans / annotate_traces.
+
+        On sync=True writes, Phoenix returns 404 with a body like
+        "Spans with IDs X do not exist" if the span hasn't been
+        ingested yet (inline-scoring race). Retry with exponential
+        backoff up to `retries` times to bridge that window.
+        Anything else short-circuits to raise_for_status.
+        """
+        import time
+
+        params = {"sync": "true" if sync else "false"}
+        delay = backoff_sec
+        for attempt in range(retries + 1):
+            r = self._client.post(path, params=params, json={"data": annotations})
+            if (
+                r.status_code == 404
+                and sync
+                and attempt < retries
+                and kind in (r.text or "")
+            ):
+                time.sleep(delay)
+                delay *= 2
+                continue
+            r.raise_for_status()
+            return r.json()
+        # exhausted retries — final response wasn't 200; raise.
         r.raise_for_status()
         return r.json()
 
