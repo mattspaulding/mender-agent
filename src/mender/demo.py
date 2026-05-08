@@ -114,13 +114,24 @@ def score_traffic(window_minutes: int) -> None:
     subprocess.run(cmd, cwd=_REPO_ROOT, check=False)
 
 
-def stage_demo(*, phase1: str = "5m", phase2: str = "3m", queries_per_minute: float = 12.0) -> None:
+def stage_demo(
+    *,
+    phase1: str = "5m",
+    phase2: str = "3m",
+    queries_per_minute: float = 12.0,
+    currency_bias: float = 1.0,
+) -> None:
     """End-to-end staging.
 
     Phase 1: FinPay on v1, drive traffic, traces score green.
     "Regression event": flip to v2.
     Phase 2: FinPay on v2, drive traffic, traces score red.
     Then score everything so Phoenix has annotated data.
+
+    Default currency_bias=1.0 — every staged turn is a currency
+    question, so every Phoenix trace gets a real pass/fail score
+    (no n_a noise in the trace-list view). Override for mixed-corpus
+    runs when you want general support questions in the dataset.
     """
     phase1_secs = _parse_duration(phase1)
     phase2_secs = _parse_duration(phase2)
@@ -128,7 +139,11 @@ def stage_demo(*, phase1: str = "5m", phase2: str = "3m", queries_per_minute: fl
     p1_count = max(4, int(phase1_secs / 60 * queries_per_minute))
     p2_count = max(4, int(phase2_secs / 60 * queries_per_minute))
 
-    console.print(f"[bold]stage-demo[/]  phase1=[bold]{phase1}[/] ({p1_count} queries) → regression → phase2=[bold]{phase2}[/] ({p2_count} queries)")
+    console.print(
+        f"[bold]stage-demo[/]  phase1=[bold]{phase1}[/] ({p1_count} queries) → "
+        f"regression → phase2=[bold]{phase2}[/] ({p2_count} queries)  "
+        f"currency_bias=[bold]{currency_bias}[/]"
+    )
     console.print()
 
     reset_state()
@@ -139,7 +154,7 @@ def stage_demo(*, phase1: str = "5m", phase2: str = "3m", queries_per_minute: fl
         # Phase 1 — good prompt
         console.print("[bold green]phase 1 — v1 (well-behaved)[/]")
         proc = start_finpay("v1")
-        drive_traffic(count=p1_count)
+        drive_traffic(count=p1_count, currency_bias=currency_bias)
         stop_finpay()
         proc = None
 
@@ -150,7 +165,7 @@ def stage_demo(*, phase1: str = "5m", phase2: str = "3m", queries_per_minute: fl
 
         # Phase 2 — bad prompt
         console.print("[bold red]phase 2 — v2 (regressed)[/]")
-        drive_traffic(count=p2_count)
+        drive_traffic(count=p2_count, currency_bias=currency_bias)
     finally:
         stop_finpay()
 

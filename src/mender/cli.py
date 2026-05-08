@@ -259,7 +259,7 @@ def _cmd_investigate(args: argparse.Namespace) -> int:
 def _cmd_stage_demo(args: argparse.Namespace) -> int:
     from .demo import stage_demo
 
-    stage_demo(phase1=args.phase1, phase2=args.phase2)
+    stage_demo(phase1=args.phase1, phase2=args.phase2, currency_bias=args.currency_bias)
     return 0
 
 
@@ -361,6 +361,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     sd.add_argument("--phase1", default="5m", help="duration of v1 traffic")
     sd.add_argument("--phase2", default="3m", help="duration of v2 (regressed) traffic")
+    sd.add_argument(
+        "--currency-bias",
+        type=float,
+        default=1.0,
+        help="fraction of staged traffic that should be currency-conversion "
+             "questions (1.0 = all currency, 0.0 = none). Default 1.0 for "
+             "clean trace-list view; lower for mixed-corpus runs.",
+    )
     sd.set_defaults(func=_cmd_stage_demo)
 
     args = p.parse_args(argv)
