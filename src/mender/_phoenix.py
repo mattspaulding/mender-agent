@@ -39,7 +39,7 @@ class PhoenixClient:
         base_url: str | None = None,
         api_key: str | None = None,
         *,
-        timeout: float = 30.0,
+        timeout: float = 60.0,
     ) -> None:
         self.base_url = (base_url or os.environ["PHOENIX_BASE_URL"]).rstrip("/")
         api_key = api_key or os.environ["PHOENIX_API_KEY"]

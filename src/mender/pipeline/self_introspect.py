@@ -128,7 +128,10 @@ def _load_snapshots(
     start = end - timedelta(minutes=window_minutes)
     with PhoenixClient() as ph:
         # Pull recent Mender spans, then bulk-fetch our self-eval annotations.
-        spans, _ = ph.list_spans(project, start_time=start, end_time=end, limit=200)
+        # Limit kept small — Phoenix's /v1/projects/<id>/spans endpoint is
+        # slow on heavy projects (200 was timing out at 5s). 20 is enough to
+        # capture the last few cycles' worth of self-eval data.
+        spans, _ = ph.list_spans(project, start_time=start, end_time=end, limit=20)
         # Top-level cycle spans only — heartbeat / investigate produce one
         # outer span per cycle. Names vary, but they're top-level so they
         # have no parent_id in the OTel sense. As a heuristic accept any

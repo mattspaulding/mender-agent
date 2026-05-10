@@ -1,4 +1,4 @@
-"""Mender — catches the cracks. Mends them.
+"""Mender — self-healing for production agents.
 
 An autonomous agent that watches your production agents via Arize Phoenix MCP,
 finds quality regressions, generates targeted evals, proposes patches, and

@@ -312,7 +312,9 @@ def _run_cycle(
     from datetime import datetime as _dt
 
     from finpay.prompts import live_version, list_versions
+    from rich.console import Console as _Console
 
+    from .. import mascot as _mascot
     from .detect import cluster_failures
     from .eval_gen import generate_eval_set
     from .eval_run import http_endpoint, run_eval_set
@@ -321,6 +323,8 @@ def _run_cycle(
     from .staging import apply_patch_to_staging, simulated_finpay_endpoint
 
     from ..tools.traces import get_failed_traces
+
+    _console = _Console()
 
     t0 = _dt.now(timezone.utc)
     store = store or make_store()
@@ -401,6 +405,9 @@ def _run_cycle(
     incident.transition("hypothesized", note=hyp.suspected_prompt_clause[:60])
     store.upsert(incident)
 
+    # Mascot beat: hypothesis formed, fix work begins.
+    _mascot.working(_console, _mascot.LINE_DRAFTING)
+
     # 4b. Bail early if hypothesis confidence is below the tuned threshold.
     if hyp.confidence < params.min_hypothesis_confidence:
         incident.transition(
@@ -424,6 +431,9 @@ def _run_cycle(
     patch = generate_patch(hyp, current_prompt=live.instruction, base_version=live.version)
     incident.patch = patch.to_dict()
     apply_patch_to_staging(patch)
+
+    # Mascot beat: patch generated, about to verify.
+    _mascot.working(_console, _mascot.LINE_VERIFYING)
 
     # 7. eval against staged patch (in-process)
     staged_endpoint = simulated_finpay_endpoint(patch.patched_prompt, label="staged")
@@ -472,6 +482,8 @@ def _run_cycle(
     #    poster no-ops with a printout when SLACK_INCOMING_WEBHOOK
     #    isn't set, so this is safe in dry-run / local dev.
     if incident.state == "patch_proposed":
+        # Mascot beat: lift cleared the threshold, sending to Slack.
+        _mascot.working(_console, _mascot.LINE_NOTIFYING)
         try:
             from ..integrations.slack import post_incident as _post_incident
 

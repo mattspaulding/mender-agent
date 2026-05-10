@@ -93,8 +93,9 @@ async def _run_heartbeat(window_minutes: int, target_project: str) -> int:
         f"{started.isoformat(timespec='seconds')}).\n\n"
         "Run the cycle protocol from your instructions:\n"
         "  0) SELF-INTROSPECTION via Phoenix MCP — pull your own "
-        f"     past cycles from the 'mender' project (last ~4h), look "
-        f"     at any `mender_self_eval` annotations.\n"
+        f"     past cycles from the 'mender' project. Use a NARROW "
+        f"     window (last 30 minutes, max 5 traces) so the MCP call "
+        f"     returns quickly. Look at any `mender_self_eval` annotations.\n"
         f"  1) Then scan the {target_project!r} project for traces in "
         f"     the window — use the typed tools where appropriate.\n"
         "  2) Summarize their eval-score distribution.\n"
@@ -131,10 +132,54 @@ async def _run_heartbeat(window_minutes: int, target_project: str) -> int:
                     final_text = part.text
 
     console.print()
-    console.print(final_text.strip() or "[dim](no final response)[/]")
+    # Print the agent's response with markup disabled — its [self]/[scan]/
+    # [cluster]/[status] tags would otherwise be eaten by Rich's parser
+    # (same bug as the [heartbeat] tag, but for LLM-emitted text).
+    if final_text.strip():
+        console.print(final_text.strip(), markup=False)
+    else:
+        console.print("[dim](no final response)[/]")
 
-    # Mascot result beat — Scene 3 closer.
-    mascot.report(console, mascot.parse_status(final_text))
+    status = mascot.parse_status(final_text)
+
+    # If the agent flagged a regression, auto-chain into the deterministic
+    # investigate pipeline. This produces a single rolling take that goes
+    # all the way from "wake up + look" through "draft fix + post to Slack"
+    # — Scenes 3 → 4 → 5 → 6 in one command.
+    if status == "regression":
+        # Concerned closer — bridges from heartbeat detection into pipeline.
+        mascot.report(console, "regression")
+
+        try:
+            from .pipeline.incident import run_incident_pipeline
+
+            outcome = run_incident_pipeline(
+                target_project=target_project,
+                window_minutes=window_minutes,
+            )
+
+            # Post-pipeline closer mascot.
+            if outcome.incident is not None and outcome.incident.state == "patch_proposed":
+                mascot.awaiting(console)
+            else:
+                # Pipeline ran but the patch didn't lift enough, or no incident
+                # was opened (deduped, etc.). Use the OK/watching closer to
+                # signal "nothing actionable for the human."
+                mascot.report(console, "ok")
+        except Exception as e:
+            # Pipeline failure shouldn't kill the heartbeat — log it visibly
+            # so capture has a clear signal, but let the cycle complete
+            # cleanly. Most common cause: FinPay not running locally.
+            console.print()
+            console.print(f"[bold red]\\[chain failed][/] {e.__class__.__name__}: {e}")
+            console.print(
+                "[dim]hint: ensure FinPay is running "
+                "([yellow]FINPAY_PROMPT_VERSION=v2 uv run finpay-serve &[/]) "
+                "before chaining into investigate.[/]"
+            )
+    else:
+        # No regression — normal closer (ok / watching).
+        mascot.report(console, status)
 
     finished = datetime.now(timezone.utc)
     console.print(
@@ -236,8 +281,19 @@ def _cmd_doctor(_: argparse.Namespace) -> int:
 
 def _cmd_investigate(args: argparse.Namespace) -> int:
     """Run the full incident pipeline (C3-C9) end-to-end."""
+    from . import mascot
     from .pipeline.incident import run_incident_pipeline
     from .pipeline.scorer import _parse_window  # type: ignore[attr-defined]
+
+    # Clear the terminal + print the Mender title block — same opening
+    # frame as `heartbeat`, so Scene 4-5 capture starts on an empty
+    # screen with consistent branding above the pipeline output.
+    try:
+        console.file.write("\033[2J\033[3J\033[H")
+        console.file.flush()
+    except (AttributeError, OSError):
+        pass
+    mascot._print_title(console)
 
     window = _parse_window(args.window)
     outcome = run_incident_pipeline(
@@ -349,7 +405,7 @@ def _cmd_score_finpay(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="mender", description="Mender — catches the cracks. Mends them.")
+    p = argparse.ArgumentParser(prog="mender", description="Mender — self-healing for production agents.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     hb = sub.add_parser("heartbeat", help="run one Mender cycle")

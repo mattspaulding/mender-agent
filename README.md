@@ -1,6 +1,6 @@
 # Mender
 
-> Catches the cracks. Mends them.
+> Self-healing for production agents.
 
 Mender is an autonomous agent that watches your production agents — reads their traces, finds quality regressions, hypothesizes the root cause, generates and runs targeted evals, proposes a fix, and asks you to approve it in Slack. Then it does the same for itself.
 

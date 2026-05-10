@@ -87,7 +87,7 @@ def _store():
 def _common_ctx(request: Request, **extra) -> dict:
     return {
         "request": request,
-        "tagline": "Catches the cracks. Mends them.",
+        "tagline": "Self-healing for production agents.",
         **extra,
     }
 

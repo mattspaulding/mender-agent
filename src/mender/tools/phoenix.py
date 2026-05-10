@@ -41,9 +41,11 @@ def build_phoenix_toolset():
     )
     from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 
-    # Generous timeout: first invocation may need to npm-install the package.
-    # We pre-warm the cache in deploy, but don't trust that locally.
-    timeout = float(os.environ.get("PHOENIX_MCP_TIMEOUT", "60"))
+    # Generous timeout: first invocation may need to npm-install the package
+    # AND the first MCP call after subprocess start can be slow (cold cache,
+    # large project responses). 180s leaves room without making the demo feel
+    # frozen if something is genuinely stuck.
+    timeout = float(os.environ.get("PHOENIX_MCP_TIMEOUT", "180"))
 
     return McpToolset(
         connection_params=StdioConnectionParams(

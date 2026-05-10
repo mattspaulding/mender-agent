@@ -25,7 +25,7 @@ _TITLE_LINES = (
     "  ╭──────────╮",
     "  │  Mender  │",
     "  ╰──────────╯",
-    "   catches the cracks. mends them.",
+    "   self-healing for production agents.",
 )
 
 
@@ -36,6 +36,7 @@ _TITLE_LINES = (
 _FACE_SLEEPING  = ("╭───╮", "│- -│", "╰───╯")
 _FACE_AWAKE     = ("╭───╮", "│◉◡◉│", "╰───╯")
 _FACE_OBSERVING = ("╭───╮", "│◉ ◉│", "╰───╯")
+_FACE_WORKING   = ("╭───╮", "│◔ ◔│", "╰───╯")  # heads-down, focused
 _FACE_CONCERNED = ("╭───╮", "│◉_◉│", "╰───╯")
 _FACE_HAPPY     = ("╭───╮", "│◉◡◉│", "╰───╯")  # alias for awake; pleasant outcome
 
@@ -50,8 +51,16 @@ LINE_OBSERVING  = "Let me take a look."
 LINE_OK         = "All clear. Catch you in 15."
 LINE_REGRESSION = "Hmm. Something's broken. Drafting a fix."
 LINE_WATCHING   = "Trend's wobbling. I'll keep an eye on it."
-LINE_APPLIED    = "Cracks mended. Back to sleep."
+LINE_APPLIED    = "All healed. Back to sleep."
 LINE_DISCARDED  = "Got it. Standing down."
+
+# Investigate-pipeline working beats — fire while Mender is doing the
+# detect → hypothesize → eval → patch → notify work, so the demo shows
+# momentum instead of silent processing.
+LINE_DRAFTING   = "Drafting a fix..."
+LINE_VERIFYING  = "Patched. Running evals on the fix..."
+LINE_NOTIFYING  = "Verified. Sending to Slack."
+LINE_AWAITING   = "Posted to Slack. Awaiting your call."
 
 
 # ----------------------------------------------------------------------------
@@ -172,6 +181,37 @@ def report(console: Console, status: str) -> None:
             console, _FACE_HAPPY, LINE_OK,
             face_color="green", line_color="bold green",
         )
+
+
+def working(console: Console, line: str, *, pause_after: float = 1.5) -> None:
+    """Print a single 'working' mascot beat — used during the investigate
+    pipeline to give the demo momentum between technical steps.
+
+    Distinct from `wake_up` (which is the multi-frame intro) and `report`
+    (which is the closer). This is for mid-cycle status updates while
+    Mender is doing the actual detect/hypothesize/eval/patch work.
+    """
+    console.print()
+    _print_face(
+        console, _FACE_WORKING, line,
+        face_color="cyan", line_color="bold cyan",
+        pause_after=pause_after,
+    )
+    console.print()
+
+
+def awaiting(console: Console, line: str | None = None) -> None:
+    """Print the post-investigate closer mascot.
+
+    Fires after Mender has posted the incident card to Slack and is now
+    waiting on a human to click Apply or Discard. Uses the awake/happy
+    face — the work is done, the ball is in the human's court.
+    """
+    console.print()
+    _print_face(
+        console, _FACE_HAPPY, line or LINE_AWAITING,
+        face_color="cyan", line_color="bold cyan",
+    )
 
 
 def slack_block(face: tuple[str, str, str], line: str) -> str:
