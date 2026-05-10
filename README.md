@@ -21,7 +21,7 @@ Mender also reads its **own** traces every cycle and tunes itself: how many eval
 - **Observability**: [Arize Phoenix](https://arize.com/docs/phoenix) — traces, evals, datasets, experiments
 - **Partner integration**: [`@arizeai/phoenix-mcp`](https://github.com/Arize-ai/phoenix/tree/main/js/packages/phoenix-mcp) — runtime introspection of operational data
 - **Action surface**: Slack (Block Kit incident messages with interactive Approve/Discard)
-- **Hosting**: Cloud Run (single service, autoscaled), triggered by Cloud Scheduler
+- **Hosting**: Cloud Run (two services: mender + finpay, autoscaled), triggered by Cloud Scheduler
 - **State**: Firestore (or Cloud Storage JSON)
 - **Secrets**: Google Secret Manager
 
@@ -30,8 +30,6 @@ Mender also reads its **own** traces every cycle and tunes itself: how many eval
 ![Architecture diagram](docs/architecture.png)
 
 Cloud Scheduler triggers Mender on Cloud Run every fifteen minutes. Mender uses Phoenix MCP to read both the target agent's traces *and* its own. Reasoning runs on Gemini 3. Eval runs hit the target agent over HTTP. Incident reports post to a Slack channel via webhook; the Approve button hits a Cloud Run endpoint that applies the patch atomically.
-
-See [`docs/architecture.md`](docs/architecture.md) for the full breakdown.
 
 ## Project layout
 
@@ -44,7 +42,6 @@ mender-agent/
 │   ├── pipeline/         # detect, hypothesize, eval, patch
 │   ├── integrations/     # Slack
 │   └── web/              # FastAPI app for UI + Slack callbacks
-├── tests/
 ├── deploy/               # Cloud Run + Scheduler config
 ├── docs/
 └── pyproject.toml
@@ -95,9 +92,9 @@ end-to-end demo runs locally and produces a real, measurable patch.
 | Phoenix instrumentation + LLM-as-judge eval scorer | ✓ |
 | Mender brain (detect / hypothesize / eval / patch loop) | ✓ |
 | Mender self-improvement (C11–C13) | ✓ |
-| Slack action layer | ✓ (needs user-side workspace) |
+| Slack action layer | ✓ |
 | Web UI | ✓ |
-| Cloud Run deploy infra | ✓ (Dockerfile + scripts; not yet deployed) |
+| Cloud Run deploy infra | ✓ (mender + finpay deployed to us-central1) |
 | Demo staging + capture playbook | ✓ |
 
 Verified end-to-end against a live FinPay v2 (regressed): Mender
