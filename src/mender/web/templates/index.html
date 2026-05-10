@@ -2,6 +2,15 @@
 {% block title %}Mender — incidents{% endblock %}
 {% block content %}
 
+<section class="hero">
+  <p>Mender is an autonomous agent that watches your production agents. Every 15 minutes he reads their Phoenix traces, finds regressions, generates evals, drafts a patch, and asks a human to approve it in Slack.</p>
+  <div class="meta">
+    <a href="https://github.com/mattspaulding/mender-agent">GitHub</a>
+    <a href="https://youtu.be/eKIyYH5-dP0">3-min demo</a>
+    <span class="tag">Built for Google Cloud Rapid Agent Hackathon · Arize Track</span>
+  </div>
+</section>
+
 <h1>Recent incidents <span class="dim">— {{ incidents|length }} total</span></h1>
 
 {% if not incidents %}

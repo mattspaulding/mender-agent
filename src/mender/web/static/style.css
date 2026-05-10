@@ -128,3 +128,43 @@ pre {
 .kv dd { margin: 0; }
 
 footer { padding: 24px; text-align: center; color: var(--fg-faint); font-size: 12px; }
+
+.hero {
+  border-bottom: 1px solid var(--border);
+  padding: 14px 0 20px;
+  margin: 0 0 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hero p {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13.5px;
+  line-height: 1.6;
+  max-width: 780px;
+}
+.hero .meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  font-size: 12px;
+}
+.hero .meta a {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg);
+  background: var(--bg-elev);
+}
+.hero .meta a:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  text-decoration: none;
+}
+.hero .meta .tag {
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+}
